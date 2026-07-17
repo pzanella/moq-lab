@@ -1,7 +1,6 @@
 {
   "name": "moq-lab",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@10.12.3",
