@@ -61,9 +61,12 @@ EOF
     moq-relay /tmp/relay.toml &
     RELAY_PID=$!
 
-    cleanup() { kill "$RELAY_PID" 2>/dev/null || true; }
-    trap cleanup EXIT
-    trap 'cleanup; exit 0' INT TERM
+    # Registered via trap below and used before this block's own `exit 0`;
+    # ShellCheck's reachability check doesn't see it.
+    # shellcheck disable=SC2329
+    csai_cleanup() { kill "$RELAY_PID" 2>/dev/null || true; }
+    trap csai_cleanup EXIT
+    trap 'csai_cleanup; exit 0' INT TERM
 
     echo "Waiting for relay HTTP API..." >&2
     until curl -sf "http://localhost:${PORT}/announced" > /dev/null 2>&1; do
