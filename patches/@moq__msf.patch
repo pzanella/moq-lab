@@ -1,0 +1,11 @@
+diff --git a/index.js b/index.js
+index 85cdebe1400ba19962d140cb0f5ee3a2854dbf78..bafbcddee27772faaa6ff3add8884cb988b4be86 100644
+--- a/index.js
++++ b/index.js
+@@ -5,5 +5,5 @@
+  *
+  * @module
+  */
+-export * from "./catalog";
++export * from "./catalog.js";
+ //# sourceMappingURL=index.js.map

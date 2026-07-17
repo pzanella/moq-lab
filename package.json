@@ -1,0 +1,34 @@
+{
+  "name": "moq-lab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@10.12.3",
+  "description": "Local Media over QUIC (MoQ) streaming sandbox with SSAI, CSAI, and SGAI ad-insertion modes. See README.md.",
+  "keywords": [
+    "moq",
+    "media-over-quic",
+    "quic",
+    "webtransport",
+    "hang",
+    "ssai",
+    "csai",
+    "sgai",
+    "ad-insertion",
+    "streaming",
+    "ffmpeg"
+  ],
+  "scripts": {
+    "stream": "./stream.sh"
+  },
+  "dependencies": {
+    "@moq/msf": "0.1.3",
+    "@moq/net": "0.1.6",
+    "ws": "^8.18.0",
+    "zod": "^4.1.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

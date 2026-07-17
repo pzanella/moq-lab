@@ -1,0 +1,14 @@
+# Keeps the build context small: only Dockerfile, run-stream.sh, lib/, ssai/,
+# and csai/ actually get COPYed into the image (see Dockerfile). Everything
+# else here is either host-only (sgai/, stream.sh) or not needed at all in
+# the image (assets, docs, the host Node project's own install artifacts).
+node_modules/
+sgai/
+assets/
+patches/
+.git/
+README.md
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+stream.sh

@@ -1,0 +1,5 @@
+packages:
+  - .
+
+patchedDependencies:
+  '@moq/msf': patches/@moq__msf.patch
