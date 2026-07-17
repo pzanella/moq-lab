@@ -305,6 +305,20 @@ publishing pipeline. Because the player buffers a few seconds of video, the
 viewer will see each event a short time after it is logged. This is expected
 for server-side tracking.
 
+**Current limitation — slow startup**: the concat filtergraph opens up to
+`N_CYCLES × 2` (up to 40) separate `ffmpeg` inputs upfront — a content segment
+and the ad, per cycle — each doing its own accurate seek (`-ss`) into the same
+source file. Building and seeking into all of them before the first frame
+reaches the encoder measurably takes on the order of ~15 seconds on ordinary
+hardware, independent of `--abr-ladder` (measured nearly identical with and
+without it). Once running, timing is frame-accurate with no ongoing drift —
+the delay is a one-time startup cost, not a precision problem — but it means
+the first ad break lands ~15s later in wall-clock time than
+`--ad-break-every`'s value would suggest if you're timing from when you ran
+`stream.sh` rather than from the first frame the player receives. Fixing this
+properly needs a different input architecture (e.g. one continuous input with
+`trim`/`atrim` instead of N separately-seeked inputs) and hasn't been done yet.
+
 ---
 
 ## 6. CSAI: SCTE-35 signaling
@@ -351,24 +365,23 @@ packet is passed through unchanged, except:
 
 - The PMT, which it rewrites (once per repetition, recomputing the CRC) to add
   the SCTE-35 elementary stream on a synthesized free PID.
-- On a wall-clock schedule (`--ad-break-every` / `--ad-break-length`), it splices in
-  a real, CRC-valid SCTE-35 `splice_info_section` — a `time_signal` command
-  with a `segmentation_descriptor` for Break Start (`0x22`) or Break End
-  (`0x23`) — wrapped in a PES packet, on that PID. The encoder lives in
-  `csai/scte35.mjs`.
+- On a schedule driven by the video elementary stream's own PES decode
+  timestamps (`--ad-break-every` / `--ad-break-length`, read against the
+  video PID's DTS — falling back to PTS for frames without B-reordering, same
+  idea as `ssai/impression-tracker.mjs`'s `tfdt` reads), it splices in a real,
+  CRC-valid SCTE-35 `splice_info_section` — a `time_signal` command with a
+  `segmentation_descriptor` for Break Start (`0x22`) or Break End (`0x23`) —
+  wrapped in a PES packet, on that PID. The encoder lives in `csai/scte35.mjs`.
+  Because this reads real timestamps rather than the wall clock, cues stay
+  accurate even if `ffmpeg` falls behind real-time under load (e.g. a heavy
+  `--abr-ladder` encode).
 
 ```
-[CSAI] 2026-07-15T14:03:44.722Z Break Start (event_id=0x3e8, pts=720450, pid=496)
-[CSAI] 2026-07-15T14:03:47.722Z Break End (event_id=0x3e8, pts=990540, pid=496)
+[CSAI] 2026-07-15T14:03:44.722Z Break Start (event_id=0x3e8, pts=2702250, pid=496)
+[CSAI] 2026-07-15T14:03:47.722Z Break End (event_id=0x3e8, pts=3242250, pid=496)
 ```
 
-**Current limitation**: the widely-used `@moq/hang` catalog client library
-doesn't parse the `mpegts` section yet — it's a fixed schema (`video`,
-`audio`, `chat`, ...) that silently drops unknown keys on decode, so a
-player built on it won't see this track through the normal catalog flow.
-Consuming it today means either patching that decode step or reading the
-raw catalog bytes directly. You can still inspect the raw SCTE-35 track over
-HTTP regardless of what a player supports:
+You can inspect the raw SCTE-35 track directly over HTTP:
 
 ```bash
 # raw SCTE-35 bytes as they arrive on the wire

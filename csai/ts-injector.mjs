@@ -4,16 +4,18 @@
 //
 // Passes every TS packet from ffmpeg to stdout unchanged, except the PMT,
 // which is rewritten (once per repetition) to add a private "SCTE-35" stream
-// (stream_type 0x06, CUEI registration descriptor) on a synthesized PID.
-// On a wall-clock schedule (ffmpeg's `-re` paces its output in real time, so
-// wall-clock elapsed tracks stream elapsed closely enough for a local sandbox)
-// it also injects real, CRC-valid SCTE-35 Break Start / Break End cues
+// (stream_type 0x06, CUEI registration descriptor) on a synthesized PID. It
+// also injects real, CRC-valid SCTE-35 Break Start / Break End cues
 // (splice_info_section, PES stream_id 0xFC per SCTE-35 sec. 9.7) on that PID —
-// see scte35.mjs for the section encoder.
+// see scte35.mjs for the section encoder. Cue timing is driven by the video
+// elementary stream's own PES decode timestamps (DTS, falling back to PTS for
+// frames without B-reordering), not the wall clock -- accurate even if ffmpeg
+// falls behind real-time under load (e.g. a heavy --abr-ladder encode).
 //
 // This is the MPEG-TS analog of ../ssai/impression-tracker.mjs (which does the
-// same transparent-proxy trick for fMP4 boxes); the two are independent and
-// never run together — SSAI uses fmp4/moq import fmp4, CSAI uses ts/moq import ts.
+// same transparent-proxy trick for fMP4 boxes, reading tfdt instead of PES
+// timestamps); the two are independent and never run together — SSAI uses
+// fmp4/moq import fmp4, CSAI uses ts/moq import ts.
 import { buildTimeSignalSection, crc32Mpeg2, SEGMENTATION_TYPE } from "./scte35.mjs";
 import { createLogger } from "../lib/log.mjs";
 
@@ -161,6 +163,44 @@ function packetizePes({ pid, continuityCounter, pes }) {
     return packetizeSingle({ pid, continuityCounter, payload: pes, kind: "PES" });
 }
 
+// Offset of the payload within a TS packet, accounting for an optional
+// adaptation field (video packets carrying a PCR use one). Returns -1 for
+// adaptation-only packets (control byte 0x02), which carry no payload.
+function payloadStart(packet) {
+    const adaptationFieldControl = (packet[3] >> 4) & 0x03;
+    if (adaptationFieldControl === 0x01) return 4;
+    if (adaptationFieldControl === 0x03) return 5 + packet[4];
+    return -1;
+}
+
+// Reads a 33-bit PES timestamp (PTS or DTS) at `off`, per ISO/IEC 13818-1 sec. 2.4.3.6.
+function readTimestamp33(buf, off) {
+    const b0 = buf[off];
+    const b1 = buf[off + 1];
+    const b2 = buf[off + 2];
+    const b3 = buf[off + 3];
+    const b4 = buf[off + 4];
+    const hi = BigInt((b0 >> 1) & 0x07);
+    const mid = BigInt(((b1 << 8) | b2) >> 1);
+    const lo = BigInt(((b3 << 8) | b4) >> 1);
+    return (hi << 30n) | (mid << 15n) | lo;
+}
+
+// Extracts the video decode timestamp from a PES packet header, in seconds.
+// Prefers DTS (decode order, always monotonic -- what ssai/impression-tracker.mjs
+// gets for free from fMP4's tfdt) over PTS (presentation order, which B-frames can
+// make non-monotonic); DTS is only present when it differs from PTS, so falling
+// back to PTS for PTS-only headers is exact, not an approximation.
+function extractVideoDecodeTime(payload) {
+    if (payload.length < 14) return null;
+    if (payload[0] !== 0x00 || payload[1] !== 0x00 || payload[2] !== 0x01) return null; // not a PES start
+    const ptsDtsFlags = (payload[7] >> 6) & 0x03;
+    if (ptsDtsFlags === 0) return null; // no timestamp in this header
+    const hasDts = ptsDtsFlags === 0x03 && payload.length >= 19;
+    const ts90k = readTimestamp33(payload, hasDts ? 14 : 9);
+    return Number(ts90k) / 90000;
+}
+
 function buildScte35Pes(section) {
     const optionalHeader = Buffer.from([0x80, 0x00, 0x00]); // '10' + flags=0, PTS_DTS_flags=00, header_data_length=0
     const pesPacketLength = optionalHeader.length + section.length;
@@ -181,7 +221,12 @@ let pmtPid = null;
 let pmtOriginal = null; // { programNumber, pcrPid, programDescriptors, streams }
 let scte35Pid = null;
 let scte35Cc = 0;
+let videoPid = null;
 const patSeenPids = new Set([PAT_PID]);
+
+// stream_type 0x1B is H.264/AVC per ISO/IEC 13818-1 table 2-34 -- what this
+// sandbox's ffmpeg pipeline always produces (single rendition or ABR ladder).
+const H264_STREAM_TYPE = 0x1b;
 
 function pickScte35Pid(usedPids) {
     for (let pid = 0x1f0; pid < 0x1fff; pid++) {
@@ -200,40 +245,50 @@ function augmentedPmtBytes(continuityCounter) {
 }
 
 // ---------------------------------------------------------------------------
-// Break Start / Break End scheduling — wall-clock based, matching
-// ssai/impression-tracker.mjs's realtime assumption (ffmpeg `-re` paces bytes at real speed).
+// Break Start / Break End scheduling — driven by the video elementary stream's
+// own decode timestamps (see extractVideoDecodeTime above), the same approach
+// ssai/impression-tracker.mjs uses via tfdt. Accurate regardless of whether
+// ffmpeg is keeping up with real time.
 // ---------------------------------------------------------------------------
 
 const CYCLE_SECS = AD_BREAK_EVERY + AD_BREAK_LENGTH;
 let pendingCue = null; // Buffer[] of TS packets waiting to be spliced in after the current packet
-let cycle = 0;
-const startedAt = Date.now();
 
-async function scheduler() {
-    for (;;) {
-        const breakStartMs = cycle * CYCLE_SECS * 1000 + AD_BREAK_EVERY * 1000;
-        const breakEndMs = breakStartMs + AD_BREAK_LENGTH * 1000;
-        const eventId = 1000 + cycle;
+let lastPts = -1;
+let ptsBase = 0;
+let lastCycleIndex = -1;
+const startFired = new Set();
 
-        await sleepUntil(breakStartMs);
-        fireCue(SEGMENTATION_TYPE.BREAK_START, eventId, "Break Start");
+function onVideoDecodeTime(pts) {
+    // Detect a PTS reset (e.g. ffmpeg's -stream_loop wrapping back to the start).
+    if (lastPts >= 0 && pts < lastPts - CYCLE_SECS) {
+        ptsBase += Math.ceil(lastPts / CYCLE_SECS) * CYCLE_SECS;
+        log(`PTS reset — base now ${ptsBase.toFixed(3)}s`);
+    }
+    lastPts = pts;
 
-        await sleepUntil(breakEndMs);
-        fireCue(SEGMENTATION_TYPE.BREAK_END, eventId, "Break End");
+    const streamSecs = pts + ptsBase;
+    const cycleIndex = Math.floor(streamSecs / CYCLE_SECS);
+    const cyclePos = streamSecs % CYCLE_SECS;
 
-        cycle += 1;
+    // Break End closes the *previous* cycle's break -- it lands exactly on this
+    // boundary because CYCLE_SECS is defined as AD_BREAK_EVERY + AD_BREAK_LENGTH.
+    // Guarded on startFired so we never emit an End without a matching Start
+    // (e.g. if playback picks up mid-cycle).
+    if (lastCycleIndex >= 0 && cycleIndex > lastCycleIndex && startFired.has(lastCycleIndex)) {
+        fireCue(SEGMENTATION_TYPE.BREAK_END, 1000 + lastCycleIndex, "Break End", streamSecs);
+    }
+    lastCycleIndex = cycleIndex;
+
+    if (cyclePos >= AD_BREAK_EVERY && !startFired.has(cycleIndex)) {
+        startFired.add(cycleIndex);
+        fireCue(SEGMENTATION_TYPE.BREAK_START, 1000 + cycleIndex, "Break Start", streamSecs);
     }
 }
 
-async function sleepUntil(targetMs) {
-    const delay = targetMs - (Date.now() - startedAt);
-    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-}
-
-function fireCue(segmentationTypeId, segmentationEventId, label) {
+function fireCue(segmentationTypeId, segmentationEventId, label, streamSecs) {
     if (scte35Pid === null) return; // PMT not seen yet; drop rather than block startup
-    const elapsedSecs = (Date.now() - startedAt) / 1000;
-    const ptsTime = BigInt(Math.round(elapsedSecs * 90000)) % 2n ** 33n;
+    const ptsTime = BigInt(Math.round(streamSecs * 90000)) % 2n ** 33n;
     const section = buildTimeSignalSection({ segmentationEventId, segmentationTypeId, ptsTime });
     const pes = buildScte35Pes(section);
     const packets = [];
@@ -280,11 +335,23 @@ function handlePacket(packet) {
             pmtOriginal = parsePmt(section);
             const usedPids = new Set([...patSeenPids, pmtPid, pmtOriginal.pcrPid, ...pmtOriginal.streams.map((s) => s.pid)]);
             scte35Pid = pickScte35Pid(usedPids);
-            log(`PMT parsed: ${pmtOriginal.streams.length} existing stream(s), scte35Pid=${scte35Pid}`);
+            // In --abr-ladder mode there are 5 video streams (one per rendition, all
+            // frame-aligned since they're split from the same source); any one of them
+            // gives an identical timeline, so just take the first.
+            videoPid = pmtOriginal.streams.find((s) => s.streamType === H264_STREAM_TYPE)?.pid ?? null;
+            log(`PMT parsed: ${pmtOriginal.streams.length} existing stream(s), scte35Pid=${scte35Pid}, videoPid=${videoPid}`);
         }
 
         process.stdout.write(augmentedPmtBytes(continuityCounter));
         return;
+    }
+
+    if (pid === videoPid && pusi) {
+        const off = payloadStart(packet);
+        if (off >= 0 && off < packet.length) {
+            const dts = extractVideoDecodeTime(packet.subarray(off));
+            if (dts !== null) onVideoDecodeTime(dts);
+        }
     }
 
     process.stdout.write(packet);
@@ -329,4 +396,3 @@ process.stdin.on("error", (err) => {
 });
 
 log(`adBreakEvery=${AD_BREAK_EVERY} adBreakLength=${AD_BREAK_LENGTH}`);
-scheduler();
