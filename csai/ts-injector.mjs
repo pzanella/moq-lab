@@ -38,10 +38,6 @@ if (!Number.isFinite(AD_BREAK_LENGTH) || AD_BREAK_LENGTH <= 0) {
     process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
-// Bit-field helpers for the small PAT/PMT parse+rebuild this needs.
-// ---------------------------------------------------------------------------
-
 // PSI packet payloads are padded with 0xFF stuffing to fill the 184-byte TS
 // payload; trim to the section's own declared length before parsing it.
 function trimToSectionLength(raw) {
@@ -115,10 +111,6 @@ function buildPmt({ programNumber, pcrPid, programDescriptors, streams }) {
     crc.writeUInt32BE(crc32Mpeg2(withoutCrc), 0);
     return Buffer.concat([withoutCrc, crc]);
 }
-
-// ---------------------------------------------------------------------------
-// TS packet helpers
-// ---------------------------------------------------------------------------
 
 function tsHeader({ pid, pusi, continuityCounter, hasAdaptation, hasPayload }) {
     const header = Buffer.alloc(4);
@@ -213,10 +205,6 @@ function buildScte35Pes(section) {
     return Buffer.concat([head, optionalHeader, section]);
 }
 
-// ---------------------------------------------------------------------------
-// Stream state
-// ---------------------------------------------------------------------------
-
 let pmtPid = null;
 let pmtOriginal = null; // { programNumber, pcrPid, programDescriptors, streams }
 let scte35Pid = null;
@@ -244,13 +232,10 @@ function augmentedPmtBytes(continuityCounter) {
     return packetizeSection({ pid: pmtPid, continuityCounter, section });
 }
 
-// ---------------------------------------------------------------------------
 // Break Start / Break End scheduling — driven by the video elementary stream's
 // own decode timestamps (see extractVideoDecodeTime above), the same approach
 // ssai/impression-tracker.mjs uses via tfdt. Accurate regardless of whether
 // ffmpeg is keeping up with real time.
-// ---------------------------------------------------------------------------
-
 const CYCLE_SECS = AD_BREAK_EVERY + AD_BREAK_LENGTH;
 let pendingCue = null; // Buffer[] of TS packets waiting to be spliced in after the current packet
 
@@ -304,10 +289,6 @@ function fireCue(segmentationTypeId, segmentationEventId, label, streamSecs) {
     pendingCue = Buffer.concat(packets);
     log(`${label} (event_id=0x${segmentationEventId.toString(16)}, pts=${ptsTime}, pid=${scte35Pid})`);
 }
-
-// ---------------------------------------------------------------------------
-// Pipeline: stdin (TS packets) -> stdout (passthrough, PMT rewritten, cues spliced)
-// ---------------------------------------------------------------------------
 
 let leftover = Buffer.alloc(0);
 

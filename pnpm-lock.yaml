@@ -14,11 +14,11 @@ importers:
   .:
     dependencies:
       '@moq/msf':
-        specifier: 0.1.4
-        version: 0.1.4(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)
+        specifier: 0.2.0
+        version: 0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)
       '@moq/net':
-        specifier: 0.1.9
-        version: 0.1.9(zod@4.4.3)
+        specifier: 0.2.0
+        version: 0.2.0(zod@4.4.3)
       ws:
         specifier: ^8.21.1
         version: 8.21.1
@@ -28,23 +28,23 @@ importers:
 
 packages:
 
-  '@moq/msf@0.1.4':
-    resolution: {integrity: sha512-cdAcWz3lFCnAu44nf4zsugAp0X84N8w/o/b5rynPMB/1uelXCdQpcbnYUK4kZhq0co8lDM28oAUOGwyL9BjIXg==}
+  '@moq/msf@0.2.0':
+    resolution: {integrity: sha512-gTeWd5/NpzxbYw9Cf8OfE+ltb6e4tNUXzUc+CkXgPRpT9BvRoE+4vYivhpFNd/M9+sTgqQtU2pK91VPbzbbrIg==}
 
-  '@moq/net@0.1.9':
-    resolution: {integrity: sha512-S6qE57ZbUAd1+pem/BUMja2T/sKhXT5mjAqo063llbtIy5DOybe3XSjEhKGaLT+/GZVbISFAeTdnuohoeI7XYw==}
+  '@moq/net@0.2.0':
+    resolution: {integrity: sha512-MlYGgjl6YJbbzqkQ4f+mLadp0V76ZRYZS9JXsyP1qI1k3L/KVzQCg81L6Yi6PVQMrrq5ZRf7Ep8KvNyojy2cCQ==}
     peerDependencies:
       zod: ^4.0.0
 
-  '@moq/qmux@0.1.3':
-    resolution: {integrity: sha512-naGmMMOxCSMeLyEATrLiY9RGyeZENC4dHFVVNWNcA17LXE9NwM3aQrQY218xXypWahYIgIkl/ZCutIP2xHibgA==}
+  '@moq/qmux@0.3.1':
+    resolution: {integrity: sha512-0bSa8S8Mpr6J/kM94MgPRCPefmLhFwMzkFpNsu873SuS5Jne4oYzXoud/5tyDDoS5JAXb1/KBOBrim55qSrViA==}
 
-  '@moq/signals@0.1.10':
-    resolution: {integrity: sha512-TSnQwcaywn/gIwC3UpwZbqYnXm2Zo8KZO6Y043jPiPnbnSlFWJVZ9TVdGAvQqrXGiaNihdcioF/0IEDABsfovw==}
+  '@moq/signals@0.2.0':
+    resolution: {integrity: sha512-BwmoJFoSIpkeRczGrNpNHWQTYelOwxuDkJvy9wrQGQn5ltl9vKifhWMpE8dlOgQigdGtwn9lOFkzOxLA0jZWmQ==}
     peerDependencies:
       '@types/react': ^19.2.17
       react: ^19.0.0
-      solid-js: ^1.9.13
+      solid-js: ^1.9.14
     peerDependenciesMeta:
       '@types/react':
         optional: true
@@ -53,8 +53,8 @@ packages:
       solid-js:
         optional: true
 
-  '@moq/web-socket-stream@0.1.0':
-    resolution: {integrity: sha512-VxPaJZvZ8qgFmTjG9XhTH0bQoQE9pExvlS/R0fH1aNcpqCnZdbYS2kvB2ypO5SyFTf6oH+4eWvgElDzW6yiqFQ==}
+  '@moq/web-socket-stream@0.1.1':
+    resolution: {integrity: sha512-VKi/GE/CLqmbEZlgNbBLbAFk2pQTxT+KUD2DjCSoxqZxbS3KBe5BBZ0m3fila4fEGyll2JT5MmgEyVr4zkZEVA==}
 
   async-mutex@0.5.0:
     resolution: {integrity: sha512-1A94B18jkJ3DYq284ohPxoXbfTA5HsQ7/Mf4DEhcyLx3Bz27Rh59iScbB6EPiP+B+joue6YCxcMXSbFC1tZKwA==}
@@ -79,19 +79,19 @@ packages:
 
 snapshots:
 
-  '@moq/msf@0.1.4(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)':
+  '@moq/msf@0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)':
     dependencies:
-      '@moq/net': 0.1.9(zod@4.4.3)
+      '@moq/net': 0.2.0(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@types/react'
       - react
       - solid-js
 
-  '@moq/net@0.1.9(zod@4.4.3)':
+  '@moq/net@0.2.0(zod@4.4.3)':
     dependencies:
-      '@moq/qmux': 0.1.3
-      '@moq/signals': 0.1.10
+      '@moq/qmux': 0.3.1
+      '@moq/signals': 0.2.0
       async-mutex: 0.5.0
       zod: 4.4.3
     transitivePeerDependencies:
@@ -99,13 +99,13 @@ snapshots:
       - react
       - solid-js
 
-  '@moq/qmux@0.1.3':
+  '@moq/qmux@0.3.1':
     dependencies:
-      '@moq/web-socket-stream': 0.1.0
+      '@moq/web-socket-stream': 0.1.1
 
-  '@moq/signals@0.1.10': {}
+  '@moq/signals@0.2.0': {}
 
-  '@moq/web-socket-stream@0.1.0': {}
+  '@moq/web-socket-stream@0.1.1': {}
 
   async-mutex@0.5.0:
     dependencies:

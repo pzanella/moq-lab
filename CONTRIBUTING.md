@@ -8,7 +8,9 @@ README in sync with what the code actually does.
 
 - Docker Desktop running (`docker info` should not error).
 - Node.js >=20 and `pnpm` — only needed if you're touching `sgai/` or `lib/`.
-  Run `pnpm install` once from the repo root.
+  Run `pnpm install` once from the repo root (this also applies
+  `patches/@moq__msf.patch`, an upstream packaging fix — nothing to do
+  manually).
 - No other host dependencies. `ffmpeg`, `moq`, and `moq-relay` all live inside
   the Docker image built by `stream.sh`.
 
@@ -42,17 +44,26 @@ inside Docker (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
 - **No new dependencies without a reason.** `sgai/`'s `package.json` is
   intentionally minimal (`@moq/net`, `@moq/msf`, `ws`, `zod`). If a change
   needs a new package, explain why in the PR description.
+- **Bump pinned versions together.** `moq-cli`/`moq-relay` (`Dockerfile`) and
+  `@moq/net`/`@moq/msf` (`package.json`) are pinned on purpose. They move
+  fast and have shipped breaking changes between minor versions before —
+  bump both sides deliberately and re-run the smoke tests, not just
+  `npm outdated`.
 - **Update README.md in the same PR.** Behavior changes (new flags, new
   broadcast names, changed defaults) must be reflected in the relevant
   section — this repo has no separate docs site, the README is the docs.
 
 ## Testing your change
 
-There is no automated test suite for the streaming pipelines themselves —
-they're exercised by actually running `stream.sh` end to end and checking the
-result (stream plays, logs look right, `curl` against the [relay HTTP
-API](README.md#8-relay-http-api) shows the expected broadcasts/catalog).
-Before opening a PR:
+CI runs two smoke tests end to end on every push/PR (see
+`.github/workflows/ci.yml`): `smoke-test-sgai` drives
+`ad-decisioning-publisher.mjs` against a real relay and checks the Event
+Timeline a subscriber receives; `smoke-test-docker` builds the actual sandbox
+image and drives the base and CSAI pipelines against a synthetic clip,
+checking the relay's HTTP API (broadcast announced, catalog shape, SCTE-35
+track present). Neither replaces manual testing of a real video, real
+playback, or `--ssai-mode`/`--abr-ladder` — they check the pipes are wired
+correctly, not that the stream looks right. Before opening a PR:
 
 1. Run the mode(s) your change affects (see commands above) and confirm the
    stream plays and terminates cleanly on `Ctrl+C`.
@@ -66,13 +77,16 @@ Before opening a PR:
    find . -path ./node_modules -prune -o -name '*.mjs' -print | xargs -n1 node --check
    ```
 
+   The two smoke-test jobs can also be run locally — see their steps in
+   `.github/workflows/ci.yml` for the exact commands.
+
 ## Submitting a PR
 
 - One logical change per PR; keep unrelated cleanup out of it.
 - Describe *what* changed and *why* — if it fixes a bug, describe the
   symptom you saw and how you confirmed the fix.
 - Note which mode(s) you tested (see above) and what you ran.
-- CI (shellcheck + `.mjs` syntax check) must pass.
+- CI (lint + the two smoke-test jobs) must pass.
 
 By contributing, you agree your contribution is licensed under this repo's
 [MIT license](LICENSE).

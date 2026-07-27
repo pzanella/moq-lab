@@ -63,7 +63,7 @@ while (!stopping) {
 
         // Sanity-check the catalog through the real MSF schema (Msf.decode() runs
         // inside Msf.fetch()) instead of trusting the publisher's raw JSON on faith.
-        const catalogTrack = broadcast.subscribe(CATALOG_TRACK_NAME, 0);
+        const catalogTrack = broadcast.subscribe(CATALOG_TRACK_NAME, { priority: 0 });
         const catalog = await Msf.fetch(catalogTrack);
         if (catalog) {
             log(`catalog: ${catalog.tracks.map((t) => `${t.name} (${t.packaging})`).join(", ")}`);
@@ -71,7 +71,7 @@ while (!stopping) {
             log("catalog track closed before a snapshot arrived");
         }
 
-        const eventsTrack = broadcast.subscribe("events", 0);
+        const eventsTrack = broadcast.subscribe("events", { priority: 0 });
 
         while (!stopping) {
             const record = await eventsTrack.readJson();

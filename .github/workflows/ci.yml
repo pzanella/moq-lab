@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  MOQ_RELAY_VERSION: "0.14.3"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -25,3 +28,163 @@ jobs:
         run: |
           find . -path ./node_modules -prune -o -name '*.mjs' -print \
             | xargs -n1 node --check
+
+  # Runs the real SGAI signaling pipeline (ad-decisioning-publisher.mjs +
+  # debug-subscriber.mjs) against a live relay, no Docker needed -- this is what
+  # would have caught ad-decisioning-publisher.mjs being accidentally deleted.
+  smoke-test-sgai:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm dependencies
+        run: |
+          corepack enable
+          pnpm install
+
+      - name: Install moq-relay (prebuilt binary, same version pinned in the Dockerfile)
+        run: |
+          curl -fsSL "https://github.com/moq-dev/moq/releases/download/moq-relay-v${MOQ_RELAY_VERSION}/moq-relay-${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C /usr/local/bin --strip-components=2 "moq-relay-${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu/bin/moq-relay"
+          moq-relay --version
+
+      - name: Start a local relay
+        run: |
+          cat > /tmp/relay.toml <<'EOF'
+          [server]
+          listen = "[::]:4989"
+          tls.generate = ["localhost"]
+
+          [web.http]
+          listen = "[::]:4989"
+
+          [auth]
+          public = ""
+          EOF
+          nohup moq-relay /tmp/relay.toml > /tmp/relay.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:4989/announced > /dev/null 2>&1 && exit 0
+            sleep 0.5
+          done
+          echo "relay never came up"; cat /tmp/relay.log; exit 1
+
+      - name: Run the Ad Decisioning Publisher against a debug subscriber and check the Event Timeline
+        run: |
+          nohup node sgai/ad-decisioning-publisher.mjs \
+            --url http://localhost:4989 \
+            --content-broadcast ci-test.hang --ad-broadcast ci-test-ad.hang \
+            --events-broadcast ci-test-events --ad-break-every 2 --ad-break-length 2 \
+            --container-name ci-fake-container --relay-port 4989 --ad-file /nonexistent.mp4 \
+            > /tmp/publisher.log 2>&1 &
+          PUB_PID=$!
+
+          timeout 12 node sgai/debug-subscriber.mjs \
+            --url http://localhost:4989 --events-broadcast ci-test-events \
+            --content-broadcast ci-test.hang --ad-broadcast ci-test-ad.hang \
+            > /tmp/subscriber.log 2>&1 || true
+
+          kill "$PUB_PID" 2>/dev/null || true
+
+          echo "--- publisher.log ---"; cat /tmp/publisher.log
+          echo "--- subscriber.log ---"; cat /tmp/subscriber.log
+
+          fail=0
+          for pattern in \
+            "catalog: events (eventtimeline)" \
+            "RECV Ad Start" \
+            "would] FETCH ad" \
+            "RECV Placement Opportunity Start" \
+            "would] UNSUBSCRIBE content" \
+            "RECV Ad End" \
+            "RECV Placement Opportunity End" \
+            "would] RESUBSCRIBE content"; do
+            if ! grep -qF "$pattern" /tmp/subscriber.log; then
+              echo "MISSING expected log line: $pattern"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+  # Builds the real sandbox image and drives the base and CSAI pipelines end to
+  # end against a synthetic clip, checking the relay's HTTP API the same way a
+  # human would with curl (see README.md section 8).
+  smoke-test-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate a tiny synthetic test clip
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+          mkdir -p assets
+          ffmpeg -hide_banner -v error \
+            -f lavfi -i "testsrc=size=320x240:rate=15:duration=6" \
+            -f lavfi -i "sine=frequency=1000:duration=6" \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+            -c:a aac -shortest assets/ci-test.mp4
+
+      - name: Build the sandbox image
+        run: docker build -t moq-lab .
+
+      - name: Smoke test -- base pipeline (no ads)
+        run: |
+          docker run -d --name ci-base --init \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -p 15443:15443/udp -p 15443:15443/tcp \
+            moq-lab /media/input.mp4 ci-test.hang false 15443 false 30 false 6
+
+          ok=false
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:15443/announced 2>/dev/null | grep -q "ci-test.hang"; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "base broadcast never announced"; docker logs ci-base; exit 1
+          fi
+
+          curl -sf http://localhost:15443/fetch/ci-test.hang/catalog.json -o /tmp/base-catalog.json
+          node -e "
+            const c = JSON.parse(require('fs').readFileSync('/tmp/base-catalog.json'));
+            if (!c.video?.renditions || Object.keys(c.video.renditions).length === 0) {
+              throw new Error('no video rendition in catalog: ' + JSON.stringify(c));
+            }
+          "
+          docker rm -f ci-base
+
+      - name: Smoke test -- CSAI (SCTE-35 injection)
+        run: |
+          docker run -d --name ci-csai --init \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -p 15444:15444/udp -p 15444:15444/tcp \
+            moq-lab /media/input.mp4 ci-test.hang false 15444 false 5 true 3
+
+          # moq-cli's own MPEG-TS stream analysis needs ~30s before it exposes
+          # the SCTE-35 elementary stream in mpegts.tracks (verified empirically,
+          # independent of --ad-break-every) -- give it real margin, not a guess.
+          ok=false
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:15444/fetch/ci-test.hang/catalog.json -o /tmp/csai-catalog.json 2>/dev/null; then
+              if node -e "
+                const c = JSON.parse(require('fs').readFileSync('/tmp/csai-catalog.json'));
+                const scte = Object.values(c.mpegts?.tracks ?? {}).find((t) => t.verbatim?.streamId === 252);
+                process.exit(scte ? 0 : 1);
+              " 2>/dev/null; then
+                ok=true; break
+              fi
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "SCTE-35 track (streamId 252) never appeared in the CSAI catalog"
+            cat /tmp/csai-catalog.json 2>/dev/null
+            docker logs ci-csai
+            exit 1
+          fi
+          docker logs ci-csai 2>&1 | grep -q "Break Start" || { echo "no Break Start cue logged"; docker logs ci-csai; exit 1; }
+          docker rm -f ci-csai

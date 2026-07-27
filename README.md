@@ -96,7 +96,10 @@ server signals the opportunity, but doesn't splice anything. See [section
   and running (`docker info` should not print an error).
 - For `--sgai-mode` only: Node.js >=20 (its host-side signaling script runs
   outside Docker) and `pnpm install` run once, from the repo root — see
-  section 7.
+  section 7. This also applies `patches/@moq__msf.patch`, a one-line fix for
+  a missing `.js` extension in `@moq/msf`'s own ESM export map (an upstream
+  packaging bug, not something this repo's code needs) — pnpm applies it
+  automatically, no separate step required.
 
 ---
 
@@ -567,3 +570,12 @@ relay and publisher/subscriber CLI (`moq-relay`, `moq-cli`, installed via
 `@moq/msf`) `sgai/` depends on. moq-lab doesn't reimplement any of the
 protocol itself; it wraps that project in a repeatable Docker sandbox and
 adds the SSAI/CSAI/SGAI ad-insertion handling around it.
+
+Versions are pinned deliberately, not left floating — both sides move fast
+enough (weekly-ish point releases, occasional breaking changes) that an
+unpinned `cargo install`/`npm install` can silently pick up different
+behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.9.3`/`0.14.3`
+([Dockerfile](Dockerfile)), `@moq/net`/`@moq/msf` `0.2.0`
+([package.json](package.json)). Bump the Rust and JS sides together and
+re-test rather than upgrading one at a time — see
+[CONTRIBUTING.md](CONTRIBUTING.md).

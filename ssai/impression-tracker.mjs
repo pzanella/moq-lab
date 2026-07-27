@@ -20,7 +20,6 @@ if (isNaN(AD_BREAK_LENGTH) || AD_BREAK_LENGTH <= 0) {
 }
 const CYCLE_SECS = AD_BREAK_EVERY + AD_BREAK_LENGTH;
 
-// 'complete' fires when the cycle index advances, not from a quartile, because modulo can never reach CYCLE_SECS.
 const QUARTILES = [
     { event: "start", pct: 0 },
     { event: "first_quartile", pct: 0.25 },
@@ -28,11 +27,8 @@ const QUARTILES = [
     { event: "third_quartile", pct: 0.75 },
 ];
 
-// ---------------------------------------------------------------------------
-// fMP4 inspector: parses moof/tfdt timestamps from the video track.
-// Works on a private copy of the data so stdout is never delayed.
-// ---------------------------------------------------------------------------
-
+// Parses moof/tfdt timestamps from the video track, on a private copy of the
+// data so stdout is never delayed.
 class FMP4Inspector {
     constructor() {
         this._buf = Buffer.alloc(0);
@@ -173,14 +169,11 @@ class FMP4Inspector {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Impression tracking — driven entirely by stream PTS, no timers
-// ---------------------------------------------------------------------------
-
+// Impression tracking — driven entirely by stream PTS, no timers.
 const fired = new Set();
 let lastPts = -1;
 let ptsBase = 0;
-let lastCycle = -1; // tracks cycle transitions to fire 'complete'
+let lastCycle = -1;
 
 function onVideoTimestamp(pts) {
     // Detect a PTS reset when ffmpeg restarts for the next pass.
@@ -194,7 +187,8 @@ function onVideoTimestamp(pts) {
     const cycleIndex = Math.floor(streamSecs / CYCLE_SECS);
     const cyclePos = streamSecs % CYCLE_SECS;
 
-    // 'complete' fires when we enter the next cycle. Use the nominal end time so the log is accurate.
+    // 'complete' fires here, on cycle advance, rather than as a quartile -- modulo
+    // can never reach CYCLE_SECS itself. Log the nominal end time, not the actual one.
     if (lastCycle >= 0 && cycleIndex > lastCycle) {
         const key = `${lastCycle}:complete`;
         if (!fired.has(key)) {
@@ -205,7 +199,7 @@ function onVideoTimestamp(pts) {
     }
     lastCycle = cycleIndex;
 
-    if (cyclePos < AD_BREAK_EVERY) return; // still in the content segment
+    if (cyclePos < AD_BREAK_EVERY) return;
 
     const adProgress = (cyclePos - AD_BREAK_EVERY) / AD_BREAK_LENGTH;
 
@@ -220,17 +214,13 @@ function onVideoTimestamp(pts) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline: stdin → stdout (passthrough) + inspector
-// ---------------------------------------------------------------------------
-
 const inspector = new FMP4Inspector();
 inspector.onVideoTimestamp = onVideoTimestamp;
 
 log(`adBreakEvery=${AD_BREAK_EVERY} adBreakLength=${AD_BREAK_LENGTH}`);
 
 process.stdin.on("data", (chunk) => {
-    process.stdout.write(chunk); // passthrough first, inspect after
+    process.stdout.write(chunk);
     inspector.feed(chunk);
 });
 

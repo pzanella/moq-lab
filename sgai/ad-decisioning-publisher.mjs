@@ -77,7 +77,7 @@ function adUpidUri(cycle) {
 const conn = await connectRelay(url);
 log(`connected to ${url}`);
 
-const broadcast = new Moq.Broadcast();
+const broadcast = new Moq.Broadcast.Producer();
 conn.publish(Moq.Path.from(eventsBroadcast), broadcast);
 
 // MSF (draft-ietf-moq-msf-01) catalog: "eventtimeline" is a real, schema-validated
@@ -101,14 +101,14 @@ const catalogBytes = Msf.encode({
     ],
 });
 
-// `broadcast.subscribe(name, priority)` only pre-registers a *local* Track -- it does not
+// `broadcast.subscribe(name, options)` only pre-registers a *local* Track -- it does not
 // bind to whatever Track a real network SUBSCRIBE later gets. Confirmed against a live relay:
 // a producer that calls subscribe() once at startup and writes to that Track forever never
 // delivers a single frame to any real subscriber, because the wire layer calls subscribe()
 // itself for each incoming SUBSCRIBE (see @moq/net's lite/publisher.ts runSubscribe), handing
 // back a *different* Track instance that only shares the name. The correct pattern (see
-// @moq/net's examples/publish.ts) is to react to broadcast.requested() and write to the Track
-// that request actually carries, once per subscriber.
+// @moq/net's examples/publish.ts) is to react to broadcast.requested() and accept() the
+// Track.Request it actually carries, once per subscriber.
 const eventsTracks = [];
 
 (async () => {
@@ -116,17 +116,20 @@ const eventsTracks = [];
         const request = await broadcast.requested();
         if (!request) break;
 
-        if (request.track.name === CATALOG_TRACK_NAME) {
+        if (request.name === CATALOG_TRACK_NAME) {
             // The catalog is a one-shot snapshot: write it once per subscriber, mirroring
             // hang's json Producer.serve() seeding each new subscriber directly. Left open
             // rather than closed immediately -- closing the track right after writing races
             // the async, fire-and-forget group delivery in @moq/net's publisher and can tear
             // down the group's stream before the frame reaches the subscriber (RESET_STREAM).
-            request.track.writeFrame(catalogBytes);
-        } else if (request.track.name === "events") {
-            eventsTracks.push(request.track);
+            // The catalog has no presentation time of its own, so Timestamp.now() is the
+            // right timestamp for a control-plane payload like this one.
+            const producer = request.accept();
+            producer.writeFrame({ payload: catalogBytes, timestamp: Moq.Time.Timestamp.now() });
+        } else if (request.name === "events") {
+            eventsTracks.push(request.accept());
         } else {
-            request.track.close(new Error(`unknown track: ${request.track.name}`));
+            request.reject(new Error(`unknown track: ${request.name}`));
         }
     }
 })();
