@@ -32,6 +32,9 @@ jobs:
   # Runs the real SGAI signaling pipeline (ad-decisioning-publisher.mjs +
   # debug-subscriber.mjs) against a live relay, no Docker needed -- this is what
   # would have caught ad-decisioning-publisher.mjs being accidentally deleted.
+  # Covers ad-break signaling, blackout, and token templating; the Media
+  # Timeline needs a real content broadcast, so that's checked in
+  # smoke-test-docker instead.
   smoke-test-sgai:
     runs-on: ubuntu-latest
     steps:
@@ -74,16 +77,20 @@ jobs:
 
       - name: Run the Ad Decisioning Publisher against a debug subscriber and check the Event Timeline
         run: |
+          # No real content broadcast in this job (see smoke-test-docker for that) --
+          # blackout and token templating don't need one, only the Media Timeline
+          # does, so those are exercised here and Media Timeline is checked there.
           nohup node sgai/ad-decisioning-publisher.mjs \
             --url http://localhost:4989 \
             --content-broadcast ci-test.hang --ad-broadcast ci-test-ad.hang \
             --events-broadcast ci-test-events --ad-break-every 2 --ad-break-length 2 \
             --container-name ci-fake-container --relay-port 4989 --ad-file /nonexistent.mp4 \
+            --blackout-at 3 --blackout-length 2 --upid-token-template true \
             > /tmp/publisher.log 2>&1 &
           PUB_PID=$!
 
           timeout 12 node sgai/debug-subscriber.mjs \
-            --url http://localhost:4989 --events-broadcast ci-test-events \
+            --url "http://localhost:4989#token=XYZ789" --events-broadcast ci-test-events \
             --content-broadcast ci-test.hang --ad-broadcast ci-test-ad.hang \
             > /tmp/subscriber.log 2>&1 || true
 
@@ -94,14 +101,18 @@ jobs:
 
           fail=0
           for pattern in \
-            "catalog: events (eventtimeline)" \
+            "catalog: events (eventtimeline), mediatime (mediatimeline)" \
             "RECV Ad Start" \
+            "resolved upid template" \
             "would] FETCH ad" \
             "RECV Placement Opportunity Start" \
             "would] UNSUBSCRIBE content" \
             "RECV Ad End" \
             "RECV Placement Opportunity End" \
-            "would] RESUBSCRIBE content"; do
+            "would] RESUBSCRIBE content" \
+            "RECV Program Blackout Override" \
+            "would] ENFORCE blackout" \
+            "would] RESTORE normal delivery"; do
             if ! grep -qF "$pattern" /tmp/subscriber.log; then
               echo "MISSING expected log line: $pattern"
               fail=1
@@ -109,13 +120,23 @@ jobs:
           done
           exit "$fail"
 
-  # Builds the real sandbox image and drives the base and CSAI pipelines end to
-  # end against a synthetic clip, checking the relay's HTTP API the same way a
-  # human would with curl (see README.md section 8).
+  # Builds the real sandbox image and drives the base, CSAI, and SGAI pipelines
+  # end to end against a synthetic clip, checking the relay's HTTP API the same
+  # way a human would with curl (see README.md section 8). SGAI here also
+  # covers the Media Timeline, which needs a real content broadcast to observe.
   smoke-test-docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm dependencies
+        run: |
+          corepack enable
+          pnpm install
 
       - name: Generate a tiny synthetic test clip
         run: |
@@ -126,6 +147,7 @@ jobs:
             -f lavfi -i "sine=frequency=1000:duration=6" \
             -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
             -c:a aac -shortest assets/ci-test.mp4
+          cp assets/ci-test.mp4 assets/ad.mp4
 
       - name: Build the sandbox image
         run: docker build -t moq-lab .
@@ -188,3 +210,56 @@ jobs:
           fi
           docker logs ci-csai 2>&1 | grep -q "Break Start" || { echo "no Break Start cue logged"; docker logs ci-csai; exit 1; }
           docker rm -f ci-csai
+
+      - name: Smoke test -- SGAI (Media Timeline, blackout, ad personalization)
+        run: |
+          docker run -d --name ci-sgai --init \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -v "$PWD/assets/ad.mp4:/media/ad.mp4:ro" \
+            -p 15445:15445/udp -p 15445:15445/tcp \
+            moq-lab /media/input.mp4 ci-sgai.hang false 15445 false 6 false 6 true ci-sgai-ad.hang
+
+          for _ in $(seq 1 30); do
+            docker logs ci-sgai 2>&1 | grep -q "SGAI: ad file ready" && break
+            sleep 1
+          done
+          docker logs ci-sgai 2>&1 | grep -q "SGAI: ad file ready" || { echo "container never became ready"; docker logs ci-sgai; exit 1; }
+
+          nohup node sgai/ad-decisioning-publisher.mjs \
+            --url http://localhost:15445 \
+            --content-broadcast ci-sgai.hang --ad-broadcast ci-sgai-ad.hang \
+            --events-broadcast ci-sgai-events --ad-break-every 6 --ad-break-length 3 \
+            --container-name ci-sgai --relay-port 15445 --ad-file /tmp/ad_normalized.mp4 \
+            --blackout-at 9 --blackout-length 4 --upid-token-template true \
+            > /tmp/sgai-publisher.log 2>&1 &
+          PUB_PID=$!
+
+          sleep 1
+          nohup node sgai/debug-subscriber.mjs \
+            --url "http://localhost:15445#token=XYZ789" --events-broadcast ci-sgai-events \
+            --content-broadcast ci-sgai.hang --ad-broadcast ci-sgai-ad.hang \
+            > /tmp/sgai-subscriber.log 2>&1 &
+          SUB_PID=$!
+
+          sleep 20
+          kill "$SUB_PID" "$PUB_PID" 2>/dev/null || true
+          sleep 1
+
+          echo "--- sgai-publisher.log ---"; cat /tmp/sgai-publisher.log
+          echo "--- sgai-subscriber.log ---"; cat /tmp/sgai-subscriber.log
+
+          fail=0
+          for pattern in \
+            "catalog: events (eventtimeline), mediatime (mediatimeline)" \
+            "MEDIATIME m=" \
+            "resolved upid template" \
+            "RECV Program Blackout Override" \
+            "would] ENFORCE blackout" \
+            "would] RESTORE normal delivery"; do
+            if ! grep -qF "$pattern" /tmp/sgai-subscriber.log; then
+              echo "MISSING expected log line: $pattern"
+              fail=1
+            fi
+          done
+          docker rm -f ci-sgai
+          exit "$fail"

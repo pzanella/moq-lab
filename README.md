@@ -38,7 +38,7 @@ moq-lab/
 ├── package.json           ← host-side Node deps, used only by sgai/
 ├── pnpm-workspace.yaml    ← marks this repo as its own pnpm project
 ├── assets/                ← your local test videos (gitignored)
-├── lib/                   ← shared helpers (logger, CLI arg parsing)
+├── lib/                   ← shared helpers (logger, CLI arg parsing, fMP4 box parsing)
 ├── ssai/                  ← Server-Side Ad Insertion (in-container proxy)
 ├── csai/                  ← CSAI SCTE-35 signaling (in-container proxy)
 └── sgai/                  ← Server-Guided Ad Insertion (host-side publisher)
@@ -55,7 +55,9 @@ this repo's own `package.json`).
 ## How it works
 
 - **`Dockerfile`** builds an image with `ffmpeg`, `moq` (the `moq-cli`
-  crate's publisher/subscriber binary), and `moq-relay` pre-installed.
+  publisher/subscriber binary), and `moq-relay` pre-installed — as prebuilt
+  Linux binaries downloaded from moq-dev/moq's GitHub releases, not compiled
+  from source, so the build is fast.
 - **`run-stream.sh`** runs inside the container: it transcodes your video,
   starts the relay, and feeds the stream into `moq` as the publisher.
 - **`stream.sh`** is what you actually call. It builds the Docker image and
@@ -221,6 +223,9 @@ uses a different pipeline.
 | `--csai-mode` | off | Add a Break Start/Break End SCTE-35 track; no ad video is interleaved |
 | `--ad-break-length N` | `6` | CSAI only: seconds between Break Start and Break End |
 | `--sgai-mode` | off | Publish content, ad, and Event Timeline signaling as independent broadcasts |
+| `--blackout-at N` | off | SGAI only: fire a one-shot Program Blackout Override N seconds in |
+| `--blackout-length N` | `10` | SGAI only: seconds until the blackout restores |
+| `--personalized-ads` | off | SGAI only: template ad upids with a `%token%` placeholder |
 
 ### npm/pnpm shortcut
 
@@ -423,9 +428,12 @@ imports any of it today. Run `pnpm install` once before first use.
   `sgai/event-timeline.mjs`) on a broadcast named `<name>-events`, on a
   `--ad-break-every`-cadence schedule (ad break length is always the real
   duration of `assets/ad.mp4` — to test a different length, use a different
-  ad file) — it does not parse media timestamps. The
+  ad file) — the ad-break schedule itself does not parse media timestamps
+  (the Media Timeline below is a separate concern that does). The
   broadcast's `catalog` track is a real `@moq/msf` (draft-ietf-moq-msf-01)
-  catalog with a `packaging: "eventtimeline"` track, not hand-rolled JSON.
+  catalog with two tracks: `events` (`packaging: "eventtimeline"`) and
+  `mediatime` (`packaging: "mediatimeline"`, see below) — not hand-rolled
+  JSON. `events` declares `depends: ["mediatime"]`, a real co-published track.
   At the start of every ad break, this same script also `docker exec`s a
   fresh, single-shot `ffmpeg | moq import fmp4` of the normalized ad into the
   sandbox container, from the ad's own frame 0 — there is no
@@ -445,6 +453,59 @@ per-break ad broadcast name), `Placement Opportunity Start`, `Ad End`,
 from content on `Placement Opportunity Start`, `FETCH` the ad broadcast named
 in `Ad Start`, and `RESUBSCRIBE` to content on `Placement Opportunity End`.
 
+### Media Timeline
+
+`sgai/ad-decisioning-publisher.mjs` also subscribes to the content
+broadcast's own video track — never affecting its playback — purely to
+observe it, and publishes a real `mediatime` track (`packaging:
+"mediatimeline"`, entries `[mediaTimeMs, [groupId, objectId], wallClockMs]`,
+per draft-ietf-moq-msf's explicit-entry format). `groupId`/`objectId` are
+read straight off the wire (the relay's own Group/object sequence numbers),
+not derived or guessed; `mediaTimeMs` comes from parsing the real `tfdt` box
+in each object's fMP4 fragment (`sgai/media-timeline.mjs`, sharing its box
+parser with `ssai/impression-tracker.mjs` via `lib/fmp4.mjs`). One entry is
+emitted per Group (i.e. per keyframe/GOP boundary), matching the spec's own
+illustrative sampling cadence.
+
+**Simplification**: this track lives on the events broadcast (co-published
+alongside `events`), not on the Media Publisher's own broadcast as the
+architecture slides show — this sandbox's content publish is `moq import
+fmp4`, an off-the-shelf binary this repo doesn't control and can't attach an
+extra track to directly.
+
+### Regional blackout
+
+`--blackout-at N` (SGAI only) fires a one-shot **Program Blackout Override**
+record (`segmentation_type_id: "0x18"`) `N` seconds into the run, per the
+SGAI-over-MOQ spec's regional-blackout example: `no_regional_blackout_flag:
+false` plus a `segmentation_upid_uri` pointing at alternate content, followed
+`--blackout-length` seconds later (default `10`) by a restore record
+(`no_regional_blackout_flag: true`, same `segmentation_event_id`). Override
+the alternate-content URI with `--blackout-alt-upid`. A real affiliate
+headend is expected to switch to the alternate content on the first record
+and back to the normal feed on the second.
+
+```bash
+./stream.sh bbb --sgai-mode --blackout-at 45 --blackout-length 15
+```
+
+### Ad personalization (`%token%` substitution)
+
+`--personalized-ads` (SGAI only) templates each ad's `segmentation_upid_uri`
+with a `%token%` placeholder (e.g.
+`moqt://localhost/bbb-ad-0.hang?tok=%token%`), per draft-ietf-moq-msf's
+Variable Substitution mechanism: a subscriber resolves `%varname%`
+placeholders **client-side**, from the fragment (`#...`) of the URI it
+connected with — never from a query parameter — using whatever token its own
+session carries (see the draft's own example:
+`moqt://relay.example.com/live#namespace--name&token=XYZ789` resolves a
+`%token%` field to `XYZ789`). `sgai/debug-subscriber.mjs` simulates that: a
+fragment on its own `--url` (e.g. `--url "http://localhost:4443#token=XYZ789"`)
+is parsed the same way and resolved against any record it receives
+(`sgai/msf-uri.mjs`). This is orthogonal to the per-break unique broadcast
+naming above, which solves a different problem (safe reuse across
+kill+restart, not personalization) — the two combine freely.
+
 ### Inspect it in isolation
 
 No browser or player needed — three terminals:
@@ -455,20 +516,25 @@ No browser or player needed — three terminals:
 #    see "What runs where" above)
 curl http://localhost:4443/announced
 
-# 2. Sanity-check the events catalog (a real @moq/msf catalog, track name "catalog")
+# 2. Sanity-check the events catalog (a real @moq/msf catalog; two tracks,
+#    "events" and "mediatime" -- see "Media Timeline" above)
 curl -s http://localhost:4443/fetch/bbb-events/catalog | jq
 
-# 3. Watch the Event Timeline live, with simulated subscriber actions
+# 3. Watch the Event Timeline and Media Timeline live, with simulated subscriber
+#    actions. The #token=... fragment on --url is optional -- pass it to see
+#    %token% resolution in action (see "Ad personalization" above; only does
+#    anything with --personalized-ads).
 # Note: http://, not https:// -- see the callout below.
 node sgai/debug-subscriber.mjs \
-  --url http://localhost:4443 --events-broadcast bbb-events \
+  --url "http://localhost:4443#token=XYZ789" --events-broadcast bbb-events \
   --content-broadcast bbb.hang --ad-broadcast bbb-ad.hang
 ```
 
 The subscriber script prints each SCTE-35 record (Placement Opportunity
-Start/End, Ad Start/End) as it arrives, plus the action a real subscriber
-would take (`UNSUBSCRIBE` content / `FETCH` ad / `RESUBSCRIBE` content) —
-logged only, no playback is actually driven.
+Start/End, Ad Start/End, Program Blackout Override) and each Media Timeline
+entry as they arrive, plus the action a real subscriber would take
+(`UNSUBSCRIBE` content / `FETCH` ad / `RESUBSCRIBE` content / enforce or
+restore a blackout) — logged only, no playback is actually driven.
 
 **Why `http://...` and not `https://` for these two scripts:** Node has no
 native WebTransport, so `@moq/net` (used by both `ad-decisioning-publisher.mjs`
@@ -547,9 +613,11 @@ Another process is using port 4443. Pass a different port with `--port N`,
 and update the player's `moq.url` to match.
 
 **The first build takes too long**
-The first build compiles `moq` and `moq-relay` from source inside Docker,
-which can take several minutes. Subsequent builds use the Docker layer cache
-and are fast. If you want to force a fresh build: `docker rmi moq-lab`.
+`moq` and `moq-relay` are downloaded as prebuilt binaries, not compiled, so
+this should only take a few seconds beyond the base image pull. If a build is
+taking minutes, check your network connection to GitHub releases rather than
+assuming a source compile is happening. Subsequent builds use the Docker
+layer cache and are faster still. To force a fresh build: `docker rmi moq-lab`.
 
 ---
 
@@ -565,8 +633,8 @@ conventions, and what to include in a PR.
 
 This sandbox is built entirely on top of
 [moq-dev/moq](https://github.com/moq-dev/moq) — the MoQ (Media over QUIC)
-relay and publisher/subscriber CLI (`moq-relay`, `moq-cli`, installed via
-`cargo` in the [Dockerfile](Dockerfile)) and the JS libraries (`@moq/net`,
+relay and publisher/subscriber CLI (`moq-relay`, `moq-cli`, downloaded as
+prebuilt binaries in the [Dockerfile](Dockerfile)) and the JS libraries (`@moq/net`,
 `@moq/msf`) `sgai/` depends on. moq-lab doesn't reimplement any of the
 protocol itself; it wraps that project in a repeatable Docker sandbox and
 adds the SSAI/CSAI/SGAI ad-insertion handling around it.

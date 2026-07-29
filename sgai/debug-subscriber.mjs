@@ -7,11 +7,19 @@
 // section. No MSE/player code is touched -- console output only.
 //
 // Usage:
-//   node debug-subscriber.mjs --url https://localhost:4443 \
+//   node debug-subscriber.mjs --url "https://localhost:4443#token=XYZ789" \
 //     --events-broadcast bbb-events [--content-broadcast bbb.hang] [--ad-broadcast bbb-ad.hang]
+//
+// A URI fragment on --url (e.g. "#token=XYZ789") is parsed exactly like a real
+// player would parse its own connection URL's fragment, and resolved against
+// any %token% placeholder found in a received record (draft-ietf-moq-msf's
+// Variable Substitution section; see sgai/msf-uri.mjs). The fragment is
+// client-side only, so it rides along on --url without affecting the
+// connection itself.
 import * as Msf from "@moq/msf";
-import { CATALOG_TRACK_NAME, connectRelay, Moq } from "./transport.mjs";
+import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced } from "./transport.mjs";
 import { SEGMENTATION_TYPE, SEGMENTATION_TYPE_NAMES } from "./event-timeline.mjs";
+import { parseFragmentVars, substitute } from "./msf-uri.mjs";
 import { parseArgs } from "../lib/cli.mjs";
 import { createLogger } from "../lib/log.mjs";
 
@@ -22,6 +30,7 @@ const url = args.url;
 const eventsBroadcast = args["events-broadcast"];
 const contentBroadcast = args["content-broadcast"] ?? "<content-broadcast>";
 const adBroadcast = args["ad-broadcast"] ?? "<ad-broadcast>";
+const templateVars = url ? parseFragmentVars(url) : {};
 
 if (!url || !eventsBroadcast) {
     console.error(
@@ -29,18 +38,6 @@ if (!url || !eventsBroadcast) {
             "[--content-broadcast <name>] [--ad-broadcast <name>]",
     );
     process.exit(1);
-}
-
-// The events broadcast may not be announced yet (publisher not started, or
-// still starting up) -- subscribing before it's announced gets the stream
-// reset by the relay instead of queued. Wait for the ANNOUNCE first.
-async function waitForAnnounced(conn, path) {
-    const announced = conn.announced(path);
-    for (;;) {
-        const entry = await announced.next();
-        if (!entry) return false;
-        if (entry.active) return true;
-    }
 }
 
 let stopping = false;
@@ -73,6 +70,20 @@ while (!stopping) {
 
         const eventsTrack = broadcast.subscribe("events", { priority: 0 });
 
+        // Media Timeline: logged on its own, concurrently with the Event Timeline
+        // loop below -- a real subscriber consumes both per the spec's
+        // Configuration principle (subscribe to both the media timeline and the
+        // event timeline), not just the ad-decisioning signaling.
+        (async () => {
+            const mediaTimeTrack = broadcast.subscribe("mediatime", { priority: 0 });
+            for (;;) {
+                const entry = await mediaTimeTrack.readJson();
+                if (entry === undefined) break;
+                const [mediaMs, location, wallMs] = entry;
+                log(`MEDIATIME m=${mediaMs}ms location=[${location.join(",")}] wall=${new Date(wallMs).toISOString()}`);
+            }
+        })().catch((err) => log(`mediatime track error: ${err.message ?? err}`));
+
         while (!stopping) {
             const record = await eventsTrack.readJson();
             if (record === undefined) {
@@ -89,11 +100,22 @@ while (!stopping) {
                 case SEGMENTATION_TYPE.PROVIDER_PLACEMENT_OPPORTUNITY_START:
                     log(`  [would] UNSUBSCRIBE content ('${contentBroadcast}')`);
                     break;
-                case SEGMENTATION_TYPE.PROVIDER_ADVERTISEMENT_START:
-                    log(`  [would] FETCH ad ('${data.segmentation_upid_uri ?? adBroadcast}')`);
+                case SEGMENTATION_TYPE.PROVIDER_ADVERTISEMENT_START: {
+                    const rawUpid = data.segmentation_upid_uri ?? adBroadcast;
+                    const upid = substitute(rawUpid, templateVars);
+                    if (upid !== rawUpid) log(`  resolved upid template '${rawUpid}' -> '${upid}' using --url's fragment`);
+                    log(`  [would] FETCH ad ('${upid}')`);
                     break;
+                }
                 case SEGMENTATION_TYPE.PROVIDER_PLACEMENT_OPPORTUNITY_END:
                     log(`  [would] RESUBSCRIBE content ('${contentBroadcast}')`);
+                    break;
+                case SEGMENTATION_TYPE.PROGRAM_BLACKOUT_OVERRIDE:
+                    if (data.no_regional_blackout_flag === false) {
+                        log(`  [would] ENFORCE blackout -- switch to alternate content ('${data.segmentation_upid_uri}')`);
+                    } else {
+                        log("  [would] RESTORE normal delivery");
+                    }
                     break;
                 default:
                     break;

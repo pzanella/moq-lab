@@ -58,11 +58,13 @@ inside Docker (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
 CI runs two smoke tests end to end on every push/PR (see
 `.github/workflows/ci.yml`): `smoke-test-sgai` drives
 `ad-decisioning-publisher.mjs` against a real relay and checks the Event
-Timeline a subscriber receives; `smoke-test-docker` builds the actual sandbox
-image and drives the base and CSAI pipelines against a synthetic clip,
-checking the relay's HTTP API (broadcast announced, catalog shape, SCTE-35
-track present). Neither replaces manual testing of a real video, real
-playback, or `--ssai-mode`/`--abr-ladder` — they check the pipes are wired
+Timeline, blackout, and `%token%` templating a subscriber receives (no
+Docker, so no real content broadcast — the Media Timeline needs one, see
+below); `smoke-test-docker` builds the actual sandbox image and drives the
+base, CSAI, and SGAI pipelines against a synthetic clip, checking the relay's
+HTTP API (broadcast announced, catalog shape, SCTE-35 track present, real
+Media Timeline entries flowing). Neither replaces manual testing of a real
+video, real playback, or `--ssai-mode`/`--abr-ladder` — they check the pipes are wired
 correctly, not that the stream looks right. Before opening a PR:
 
 1. Run the mode(s) your change affects (see commands above) and confirm the

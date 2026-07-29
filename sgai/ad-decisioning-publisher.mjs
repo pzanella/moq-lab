@@ -13,15 +13,30 @@
 // container, so the ad always starts at its own frame 0 instead of wherever a
 // continuously-looping stream happened to be when the break began.
 //
+// It also observes the real content track to publish a Media Timeline (see
+// sgai/media-timeline.mjs) and, optionally, a one-shot regional-blackout demo
+// (Program Blackout Override) and %token%-templated ad upids (see
+// sgai/msf-uri.mjs).
+//
 // Usage:
 //   node ad-decisioning-publisher.mjs --url https://localhost:4443 \
 //     --content-broadcast bbb.hang --ad-broadcast bbb-ad.hang \
 //     --events-broadcast bbb-events --ad-break-every 30 --ad-break-length 15 \
-//     --container-name moq-stream-1234 --relay-port 4443 --ad-file /tmp/ad_normalized.mp4
+//     --container-name moq-stream-1234 --relay-port 4443 --ad-file /tmp/ad_normalized.mp4 \
+//     [--blackout-at 45] [--blackout-length 10] [--blackout-alt-upid moqt://localhost/alt.hang] \
+//     [--upid-token-template true]
 import { spawn } from "node:child_process";
 import * as Msf from "@moq/msf";
-import { CATALOG_TRACK_NAME, connectRelay, Moq } from "./transport.mjs";
-import { placementOpportunityStart, placementOpportunityEnd, adStart, adEnd, SEGMENTATION_TYPE_NAMES } from "./event-timeline.mjs";
+import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced } from "./transport.mjs";
+import {
+    placementOpportunityStart,
+    placementOpportunityEnd,
+    adStart,
+    adEnd,
+    programBlackoutOverride,
+    SEGMENTATION_TYPE_NAMES,
+} from "./event-timeline.mjs";
+import { resolveVideoTiming, mediaTimelineEntry } from "./media-timeline.mjs";
 import { parseArgs } from "../lib/cli.mjs";
 import { createLogger } from "../lib/log.mjs";
 
@@ -42,6 +57,15 @@ const adBreakLength = Number(args["ad-break-length"]);
 const containerName = args["container-name"];
 const relayPort = args["relay-port"];
 const adFile = args["ad-file"] ?? "/tmp/ad_normalized.mp4";
+// Optional regional-blackout demo (SGAI-over-MOQ spec section 4.2): fires once,
+// blackoutAt seconds into the run, restoring after blackoutLength seconds.
+const blackoutAt = args["blackout-at"] !== undefined ? Number(args["blackout-at"]) : null;
+const blackoutLength = Number(args["blackout-length"] ?? 10);
+const blackoutAltUpid = args["blackout-alt-upid"] ?? "moqt://localhost/blackout-alt-content.hang";
+// Optional demo of draft-ietf-moq-msf's URI-fragment %variable% substitution:
+// appends a %token%-templated query param to the ad upid_uri, for a subscriber
+// (see debug-subscriber.mjs's --token) to resolve client-side.
+const upidTokenTemplate = args["upid-token-template"] === "true";
 
 for (const [flag, value] of [
     ["--url", url],
@@ -55,6 +79,8 @@ for (const [flag, value] of [
 }
 if (!Number.isFinite(adBreakEvery) || adBreakEvery <= 0) fail("--ad-break-every must be a positive number");
 if (!Number.isFinite(adBreakLength) || adBreakLength <= 0) fail("--ad-break-length must be a positive number");
+if (blackoutAt !== null && (!Number.isFinite(blackoutAt) || blackoutAt < 0)) fail("--blackout-at must be a non-negative number");
+if (blackoutAt !== null && (!Number.isFinite(blackoutLength) || blackoutLength <= 0)) fail("--blackout-length must be a positive number");
 
 const cycleSecs = adBreakEvery + adBreakLength;
 
@@ -70,23 +96,40 @@ function cycleAdBroadcast(cycle) {
 // A subscriber resolves the actual broadcast to fetch from this URI, per the
 // SCTE-35 upid_uri's real purpose: pointing at where to fetch *this* specific
 // ad. The scheme/host are informal; only the last path segment is read.
+// With --upid-token-template, a %token% placeholder rides along in the query
+// string for a subscriber to resolve (see sgai/msf-uri.mjs) -- orthogonal to
+// the per-cycle broadcast name above, which solves a different problem (safe
+// reuse across kill+restart, not personalization).
 function adUpidUri(cycle) {
-    return `moqt://localhost/${cycleAdBroadcast(cycle)}`;
+    const base = `moqt://localhost/${cycleAdBroadcast(cycle)}`;
+    return upidTokenTemplate ? `${base}?tok=%token%` : base;
 }
 
 const conn = await connectRelay(url);
 log(`connected to ${url}`);
 
+// Declared early -- the Media Timeline observer below (an async IIFE that
+// starts running immediately, well before the ad-break loop further down)
+// checks this in its own loops so a shutdown signal can actually stop it
+// instead of leaving a zombie process behind.
+let running = true;
+process.on("SIGINT", () => { running = false; });
+process.on("SIGTERM", () => { running = false; });
+
 const broadcast = new Moq.Broadcast.Producer();
 conn.publish(Moq.Path.from(eventsBroadcast), broadcast);
 
-// MSF (draft-ietf-moq-msf-01) catalog: "eventtimeline" is a real, schema-validated
-// packaging value (see @moq/msf's PackagingSchema), unlike the ad-hoc JSON this used
-// to write. `role` is omitted -- it's a separate video/audio/caption/... enum, and the
-// draft's own timeline-track examples leave it unset. `depends`, `mimetype`, and
-// `eventType` aren't modeled by @moq/msf yet (its TrackSchema doesn't declare them), so
-// they ride along on the wire via Msf.encode()'s plain object spread but would be
-// stripped by a strict Msf.decode() -- read raw by debug-subscriber.mjs for now.
+// MSF (draft-ietf-moq-msf-01) catalog: "eventtimeline"/"mediatimeline" are real,
+// schema-validated packaging values (see @moq/msf's PackagingSchema), unlike the
+// ad-hoc JSON this used to write. `role` is omitted -- it's a separate
+// video/audio/caption/... enum, and the draft's own timeline-track examples leave
+// it unset. `depends`, `mimetype`, and `eventType` aren't modeled by @moq/msf yet
+// (its TrackSchema doesn't declare them), so they ride along on the wire via
+// Msf.encode()'s plain object spread but would be stripped by a strict
+// Msf.decode() -- read raw by debug-subscriber.mjs for now.
+//
+// "events" depends on "mediatime", a real co-published track (see below) --
+// not the content broadcast's name, which was never a valid track reference.
 const catalogBytes = Msf.encode({
     tracks: [
         {
@@ -94,8 +137,15 @@ const catalogBytes = Msf.encode({
             namespace: eventsBroadcast,
             packaging: "eventtimeline",
             mimetype: "application/json",
-            depends: [contentBroadcast],
+            depends: ["mediatime"],
             eventType: "org.scte.scte35.v1",
+            isLive: true,
+        },
+        {
+            name: "mediatime",
+            namespace: eventsBroadcast,
+            packaging: "mediatimeline",
+            mimetype: "application/json",
             isLive: true,
         },
     ],
@@ -110,6 +160,7 @@ const catalogBytes = Msf.encode({
 // @moq/net's examples/publish.ts) is to react to broadcast.requested() and accept() the
 // Track.Request it actually carries, once per subscriber.
 const eventsTracks = [];
+const mediaTimeTracks = [];
 
 (async () => {
     for (;;) {
@@ -128,6 +179,8 @@ const eventsTracks = [];
             producer.writeFrame({ payload: catalogBytes, timestamp: Moq.Time.Timestamp.now() });
         } else if (request.name === "events") {
             eventsTracks.push(request.accept());
+        } else if (request.name === "mediatime") {
+            mediaTimeTracks.push(request.accept());
         } else {
             request.reject(new Error(`unknown track: ${request.name}`));
         }
@@ -146,6 +199,66 @@ function emit(record) {
     const name = SEGMENTATION_TYPE_NAMES[record.data.segmentation_type_id] ?? record.data.segmentation_type_id;
     log(`emit ${name} (event_id=${record.data.segmentation_event_id}, m=${record.m})`);
 }
+
+function emitMediaTimelineEntry(entry) {
+    for (let i = mediaTimeTracks.length - 1; i >= 0; i--) {
+        try {
+            mediaTimeTracks[i].writeJson(entry);
+        } catch {
+            mediaTimeTracks.splice(i, 1);
+        }
+    }
+}
+
+// Media Timeline: observes the real content broadcast (subscribing never affects
+// its playback) to publish genuine [mediaTimeMs, [group, object], wallClockMs]
+// entries -- one per Group (object 0, i.e. each keyframe/GOP), matching the
+// spec's own illustrative sampling cadence. This is the only part of this
+// script that reads real media timestamps instead of working off the
+// ad-break wall-clock schedule.
+//
+// Simplification: this lives on the events broadcast (co-published with the
+// Event Timeline, both under eventsBroadcast) rather than on the Media
+// Publisher's own broadcast as the architecture slides show -- this sandbox's
+// content publish is `moq import fmp4` (an off-the-shelf binary this repo
+// doesn't control), not something we can attach an extra track to directly.
+(async () => {
+    let timing;
+    while (running) {
+        try {
+            timing = await resolveVideoTiming(url, contentBroadcast);
+            break;
+        } catch (err) {
+            log(`waiting for '${contentBroadcast}' catalog (${err.message})...`);
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+    }
+    if (!running) return;
+    log(
+        `observing '${contentBroadcast}/${timing.trackName}' for the Media Timeline ` +
+            `(videoTrackId=${timing.videoTrackId}, timescale=${timing.timescale})`,
+    );
+
+    const contentPath = Moq.Path.from(contentBroadcast);
+    const found = await waitForAnnounced(conn, contentPath);
+    if (!running) return;
+    if (!found) {
+        log(`'${contentBroadcast}' was never announced; Media Timeline disabled`);
+        return;
+    }
+    const contentTrack = conn.consume(contentPath).subscribe(timing.trackName, { priority: 0 });
+
+    while (running) {
+        const object = await contentTrack.readFrameSequence();
+        if (!object) {
+            log("content track closed; Media Timeline stopped");
+            return;
+        }
+        if (object.frame !== 0) continue; // one entry per Group (keyframe), not per frame
+        const entry = mediaTimelineEntry(object, timing.videoTrackId, timing.timescale);
+        if (entry) emitMediaTimelineEntry(entry);
+    }
+})();
 
 // Launches a single playthrough of the ad, from its own frame 0, as a detached process inside
 // the sandbox container, publishing under this cycle's own unique broadcast name.
@@ -170,14 +283,26 @@ function stopAd(broadcastName) {
 
 log(`schedule: ${adBreakEvery}s content -> ${adBreakLength}s ad, repeating. events broadcast: '${eventsBroadcast}'`);
 
-let running = true;
-process.on("SIGINT", () => { running = false; });
-process.on("SIGTERM", () => { running = false; });
-
 const startedAt = Date.now();
 async function sleepUntil(targetMs) {
     const delay = targetMs - (Date.now() - startedAt);
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+// Regional blackout demo (SGAI-over-MOQ spec section 4.2): a one-shot
+// Program Blackout Override at blackoutAt, restored at blackoutAt+blackoutLength.
+// Runs concurrently with the ad-break loop below, sharing the same startedAt
+// epoch and running flag -- independent of the ad-break schedule/event ids.
+if (blackoutAt !== null) {
+    const BLACKOUT_EVENT_ID = 5000;
+    (async () => {
+        await sleepUntil(blackoutAt * 1000);
+        if (!running) return;
+        emit(programBlackoutOverride(blackoutAt * 1000, BLACKOUT_EVENT_ID, { blackedOut: true, alternateUpid: blackoutAltUpid }));
+        await sleepUntil((blackoutAt + blackoutLength) * 1000);
+        if (!running) return;
+        emit(programBlackoutOverride((blackoutAt + blackoutLength) * 1000, BLACKOUT_EVENT_ID, { blackedOut: false }));
+    })();
 }
 
 let cycle = 0;

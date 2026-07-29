@@ -8,6 +8,7 @@ export const SEGMENTATION_TYPE = {
     PROVIDER_PLACEMENT_OPPORTUNITY_END: "0x35",
     PROVIDER_ADVERTISEMENT_START: "0x30",
     PROVIDER_ADVERTISEMENT_END: "0x31",
+    PROGRAM_BLACKOUT_OVERRIDE: "0x18",
 };
 
 export const SEGMENTATION_TYPE_NAMES = {
@@ -15,6 +16,7 @@ export const SEGMENTATION_TYPE_NAMES = {
     [SEGMENTATION_TYPE.PROVIDER_PLACEMENT_OPPORTUNITY_END]: "Placement Opportunity End",
     [SEGMENTATION_TYPE.PROVIDER_ADVERTISEMENT_START]: "Ad Start",
     [SEGMENTATION_TYPE.PROVIDER_ADVERTISEMENT_END]: "Ad End",
+    [SEGMENTATION_TYPE.PROGRAM_BLACKOUT_OVERRIDE]: "Program Blackout Override",
 };
 
 const UPID_TYPE_URI = "0x0F";
@@ -59,4 +61,27 @@ export function adEnd(m, eventId) {
             segmentation_event_id: eventId,
         },
     };
+}
+
+// Per SGAI-over-MOQ spec section 3.5 (Delivery Restriction and Control Fields)
+// and the regional-blackout example (4.2): a Program Blackout Override record
+// updates the program's delivery restriction flags. Call it twice with the
+// same eventId -- once with blackedOut: true (+ alternateUpid, if the
+// affiliate should switch to alternate content) to start the blackout, once
+// with blackedOut: false to restore normal distribution.
+export function programBlackoutOverride(m, eventId, { blackedOut, alternateUpid } = {}) {
+    const data = {
+        segmentation_type_id: SEGMENTATION_TYPE.PROGRAM_BLACKOUT_OVERRIDE,
+        segmentation_event_id: eventId,
+        delivery_not_restricted_flag: false,
+        web_delivery_allowed_flag: true,
+        no_regional_blackout_flag: !blackedOut,
+        archive_allowed_flag: true,
+        device_restrictions: 3,
+    };
+    if (blackedOut && alternateUpid) {
+        data.segmentation_upid_type = UPID_TYPE_URI;
+        data.segmentation_upid_uri = alternateUpid;
+    }
+    return { m, data };
 }

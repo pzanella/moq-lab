@@ -52,4 +52,16 @@ export async function connectRelay(url) {
 // @moq/msf doesn't export the constant). No ".json" suffix -- that's hang's convention.
 export const CATALOG_TRACK_NAME = "catalog";
 
+// Subscribing to a broadcast before the relay has announced it gets the
+// stream reset instead of queued -- wait for the ANNOUNCE first. Shared by
+// every host-side script that consumes a broadcast it doesn't itself own.
+export async function waitForAnnounced(conn, path) {
+    const announced = conn.announced(path);
+    for (;;) {
+        const entry = await announced.next();
+        if (!entry) return false;
+        if (entry.active) return true;
+    }
+}
+
 export { Moq };

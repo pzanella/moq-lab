@@ -15,6 +15,11 @@
 #                      always assets/ad.mp4's real duration (auto-detected via ffprobe,
 #                      minus a small pipeline-latency margin) -- to test a different ad
 #                      break length, use a different ad.mp4.
+# --blackout-at N      SGAI only: fire a one-shot regional-blackout demo (Program
+#                      Blackout Override) N seconds into the run.
+# --blackout-length N  SGAI only: seconds until the blackout restores (default: 10).
+# --personalized-ads   SGAI only: template ad upids with a %token% placeholder --
+#                      see the --token flag on sgai/debug-subscriber.mjs.
 set -euo pipefail
 
 # Yellow only when stderr is an actual terminal -- keeps piped/redirected output
@@ -36,6 +41,9 @@ CSAI=false
 AD_BREAK_LENGTH=6
 AD_BREAK_LENGTH_SET=false
 SGAI=false
+BLACKOUT_AT=""
+BLACKOUT_LENGTH=10
+PERSONALIZED_ADS=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -46,6 +54,9 @@ while [ $# -gt 0 ]; do
         --csai-mode) CSAI=true; shift ;;
         --ad-break-length) AD_BREAK_LENGTH="$2"; AD_BREAK_LENGTH_SET=true; shift 2 ;;
         --sgai-mode) SGAI=true; shift ;;
+        --blackout-at) BLACKOUT_AT="$2"; shift 2 ;;
+        --blackout-length) BLACKOUT_LENGTH="$2"; shift 2 ;;
+        --personalized-ads) PERSONALIZED_ADS=true; shift ;;
         *) NAME="$1"; shift ;;
     esac
 done
@@ -64,6 +75,10 @@ fi
 # would be silently discarded further down -- warn instead of doing that quietly.
 if [ "$AD_BREAK_LENGTH_SET" = true ] && [ "$CSAI" != true ]; then
     warn "--ad-break-length only applies to --csai-mode; ignored here (SSAI/SGAI always use assets/ad.mp4's real duration)."
+fi
+
+if { [ -n "$BLACKOUT_AT" ] || [ "$PERSONALIZED_ADS" = true ]; } && [ "$SGAI" != true ]; then
+    warn "--blackout-at/--blackout-length/--personalized-ads only apply to --sgai-mode; ignored here."
 fi
 
 # This whole project is self-contained -- MOQ_DIR is the only path this
@@ -164,16 +179,21 @@ if [ "$SGAI" = true ]; then
     # Note: http:// (not https://) — the relay's web.http listener that speaks
     # WebSocket/qmux is plain HTTP; TLS only applies to its native QUIC/WebTransport
     # listener, which Node can't use (no WebTransport support). See README section 7.
-    node "$MOQ_DIR/sgai/ad-decisioning-publisher.mjs" \
-        --url "http://localhost:${PORT}" \
-        --content-broadcast "$BROADCAST" \
-        --ad-broadcast "$AD_BROADCAST" \
-        --events-broadcast "$EVENTS_BROADCAST" \
-        --ad-break-every "$AD_BREAK_EVERY" \
-        --ad-break-length "$SGAI_AD_BREAK_LENGTH" \
-        --container-name "$CONTAINER_NAME" \
-        --relay-port "$PORT" \
+    AD_DECISIONING_ARGS=(
+        --url "http://localhost:${PORT}"
+        --content-broadcast "$BROADCAST"
+        --ad-broadcast "$AD_BROADCAST"
+        --events-broadcast "$EVENTS_BROADCAST"
+        --ad-break-every "$AD_BREAK_EVERY"
+        --ad-break-length "$SGAI_AD_BREAK_LENGTH"
+        --container-name "$CONTAINER_NAME"
+        --relay-port "$PORT"
         --ad-file "/tmp/ad_normalized.mp4"
+    )
+    [ -n "$BLACKOUT_AT" ] && AD_DECISIONING_ARGS+=(--blackout-at "$BLACKOUT_AT" --blackout-length "$BLACKOUT_LENGTH")
+    [ "$PERSONALIZED_ADS" = true ] && AD_DECISIONING_ARGS+=(--upid-token-template true)
+
+    node "$MOQ_DIR/sgai/ad-decisioning-publisher.mjs" "${AD_DECISIONING_ARGS[@]}"
 else
     docker run --name "$CONTAINER_NAME" --rm -it --init \
         "${DOCKER_VOLUMES[@]}" \

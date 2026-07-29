@@ -5,6 +5,7 @@
 // Reads raw fMP4 from stdin, passes every byte unchanged to stdout,
 // and logs impression events when the stream PTS crosses ad quartile thresholds.
 import { createLogger } from "../lib/log.mjs";
+import { boxHeader, parseMoov, parseMoofDecodeTime } from "../lib/fmp4.mjs";
 
 const log = createLogger("SSAI");
 
@@ -51,21 +52,9 @@ class FMP4Inspector {
         this._parse();
     }
 
-    // When rawSize === 1, the spec uses a 64-bit "largesize" at bytes 8-15.
-    static _boxHeader(buf, off) {
-        const rawSize = buf.readUInt32BE(off);
-        if (rawSize === 1) {
-            if (buf.length < off + 16) return null; // incomplete, wait
-            const hi = buf.readUInt32BE(off + 8);
-            const lo = buf.readUInt32BE(off + 12);
-            return { size: hi * 0x100000000 + lo, headerSize: 16 };
-        }
-        return { size: rawSize, headerSize: 8 };
-    }
-
     _parse() {
         while (this._buf.length >= 8) {
-            const hdr = FMP4Inspector._boxHeader(this._buf, 0);
+            const hdr = boxHeader(this._buf, 0);
             if (!hdr) break;
             const { size, headerSize } = hdr;
 
@@ -90,82 +79,27 @@ class FMP4Inspector {
             const body = this._buf.subarray(headerSize, size);
             this._buf = this._buf.subarray(size);
 
-            if (type === "moov") this._parseMoov(body);
-            else if (type === "moof") this._parseMoof(body);
+            if (type === "moov") this._onMoov(body);
+            else if (type === "moof") this._onMoof(body);
         }
     }
 
-    _scanBoxes(buf, handlers) {
-        let off = 0;
-        while (off + 8 <= buf.length) {
-            const hdr = FMP4Inspector._boxHeader(buf, off);
-            if (!hdr) break;
-            const { size, headerSize } = hdr;
-            if (size < headerSize || off + size > buf.length) break;
-            const type = buf.subarray(off + 4, off + 8).toString("ascii");
-            handlers[type]?.(buf.subarray(off + headerSize, off + size));
-            off += size;
+    _onMoov(body) {
+        const { timescales, videoTrackId } = parseMoov(body);
+        for (const [trackId, timescale] of timescales) this._timescales.set(trackId, timescale);
+        if (videoTrackId !== null && this._videoTrackId === null) {
+            this._videoTrackId = videoTrackId;
+            log(`video track ${videoTrackId} timescale ${timescales.get(videoTrackId)}`);
         }
     }
 
-    _parseMoov(body) {
-        this._scanBoxes(body, {
-            trak: (b) => {
-                let trackId = null,
-                    timescale = null,
-                    isVideo = false;
-                this._scanBoxes(b, {
-                    tkhd: (tb) => {
-                        // track_ID is at offset 12 (version 0) or 20 (version 1)
-                        const off = tb[0] === 1 ? 20 : 12;
-                        if (tb.length >= off + 4) trackId = tb.readUInt32BE(off);
-                    },
-                    mdia: (mb) => {
-                        this._scanBoxes(mb, {
-                            mdhd: (db) => {
-                                // timescale is at offset 12 (version 0) or 20 (version 1)
-                                const off = db[0] === 1 ? 20 : 12;
-                                if (db.length >= off + 4) timescale = db.readUInt32BE(off);
-                            },
-                            hdlr: (hb) => {
-                                // handler_type is 4 bytes at offset 8 (after version+flags+pre_defined)
-                                if (hb.length >= 12) isVideo = hb.subarray(8, 12).toString() === "vide";
-                            },
-                        });
-                    },
-                });
-                if (trackId !== null && timescale !== null) {
-                    this._timescales.set(trackId, timescale);
-                    if (isVideo && this._videoTrackId === null) {
-                        this._videoTrackId = trackId;
-                        log(`video track ${trackId} timescale ${timescale}`);
-                    }
-                }
-            },
-        });
-    }
-
-    _parseMoof(body) {
-        this._scanBoxes(body, {
-            traf: (b) => {
-                let trackId = null,
-                    decodeTime = null;
-                this._scanBoxes(b, {
-                    tfhd: (tb) => {
-                        if (tb.length >= 8) trackId = tb.readUInt32BE(4);
-                    },
-                    tfdt: (tb) => {
-                        if (tb.length < 8) return;
-                        // base_media_decode_time: 4 bytes (version 0) or 8 bytes (version 1)
-                        decodeTime = tb[0] === 1 ? Number(tb.readBigUInt64BE(4)) : tb.readUInt32BE(4);
-                    },
-                });
-                if (trackId !== null && trackId === this._videoTrackId && decodeTime !== null) {
-                    const timescale = this._timescales.get(trackId) ?? 90000;
-                    this.onVideoTimestamp?.(decodeTime / timescale);
-                }
-            },
-        });
+    _onMoof(body) {
+        if (this._videoTrackId === null) return;
+        const decodeTime = parseMoofDecodeTime(body, this._videoTrackId);
+        if (decodeTime !== null) {
+            const timescale = this._timescales.get(this._videoTrackId) ?? 90000;
+            this.onVideoTimestamp?.(decodeTime / timescale);
+        }
     }
 }
 
