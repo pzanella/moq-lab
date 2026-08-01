@@ -92,30 +92,55 @@ jobs:
             > /tmp/publisher.log 2>&1 &
           PUB_PID=$!
 
-          timeout 12 node sgai/debug-subscriber.mjs \
+          # Give the publisher a moment to announce its broadcasts before the
+          # subscriber connects, same as smoke-test-docker's SGAI step -- without
+          # this the subscriber can attach after the earliest events already fired
+          # and permanently miss them (this is a live stream, not a replay).
+          sleep 1
+          nohup node sgai/debug-subscriber.mjs \
             --url "http://localhost:4989#token=XYZ789" --events-broadcast ci-test-events \
             --content-broadcast ci-test.hang --ad-broadcast ci-test-ad.hang \
-            > /tmp/subscriber.log 2>&1 || true
+            > /tmp/subscriber.log 2>&1 &
+          SUB_PID=$!
 
-          kill "$PUB_PID" 2>/dev/null || true
+          # Ad-break/blackout timing is wall-clock (Node setTimeout on the
+          # runner itself). Poll for all patterns instead of a single fixed
+          # `timeout 12` + one-shot check -- that combination was flaky under
+          # CI load (a slow tick could blow the 12s budget with no way to
+          # recover), same class of bug the CSAI SCTE-35 check and the SGAI
+          # docker step below already had to fix. A fast runner still exits
+          # early; a slow one gets real margin instead of a hard cutoff.
+          PATTERNS=(
+            "catalog: events (eventtimeline), mediatime (mediatimeline)"
+            "RECV Ad Start"
+            "resolved upid template"
+            "would] FETCH ad"
+            "RECV Placement Opportunity Start"
+            "would] UNSUBSCRIBE content"
+            "RECV Ad End"
+            "RECV Placement Opportunity End"
+            "would] RESUBSCRIBE content"
+            "RECV Program Blackout Override"
+            "would] ENFORCE blackout"
+            "would] RESTORE normal delivery"
+          )
+          for _ in $(seq 1 30); do
+            all_found=true
+            for pattern in "${PATTERNS[@]}"; do
+              grep -qF "$pattern" /tmp/subscriber.log 2>/dev/null || all_found=false
+            done
+            [ "$all_found" = true ] && break
+            sleep 1
+          done
+
+          kill "$SUB_PID" "$PUB_PID" 2>/dev/null || true
+          sleep 1
 
           echo "--- publisher.log ---"; cat /tmp/publisher.log
           echo "--- subscriber.log ---"; cat /tmp/subscriber.log
 
           fail=0
-          for pattern in \
-            "catalog: events (eventtimeline), mediatime (mediatimeline)" \
-            "RECV Ad Start" \
-            "resolved upid template" \
-            "would] FETCH ad" \
-            "RECV Placement Opportunity Start" \
-            "would] UNSUBSCRIBE content" \
-            "RECV Ad End" \
-            "RECV Placement Opportunity End" \
-            "would] RESUBSCRIBE content" \
-            "RECV Program Blackout Override" \
-            "would] ENFORCE blackout" \
-            "would] RESTORE normal delivery"; do
+          for pattern in "${PATTERNS[@]}"; do
             if ! grep -qF "$pattern" /tmp/subscriber.log; then
               echo "MISSING expected log line: $pattern"
               fail=1
@@ -123,10 +148,11 @@ jobs:
           done
           exit "$fail"
 
-  # Builds the real sandbox image and drives the base, CSAI, and SGAI pipelines
-  # end to end against a synthetic clip, checking the relay's HTTP API the same
-  # way a human would with curl (see README.md section 8). SGAI here also
-  # covers the Media Timeline, which needs a real content broadcast to observe.
+  # Builds the real sandbox image and drives the base, SSAI, CSAI, and SGAI
+  # pipelines end to end against a synthetic clip, checking the relay's HTTP
+  # API the same way a human would with curl (see README.md section 8). SGAI
+  # here also covers the Media Timeline, which needs a real content broadcast
+  # to observe.
   smoke-test-docker:
     runs-on: ubuntu-latest
     steps:
@@ -181,6 +207,69 @@ jobs:
             }
           "
           docker rm -f ci-base
+
+      - name: Smoke test -- SSAI (ad splicing + impression tracking)
+        run: |
+          docker run -d --name ci-ssai --init \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -v "$PWD/assets/ad.mp4:/media/ad.mp4:ro" \
+            -p 15446:15446/udp -p 15446:15446/tcp \
+            moq-lab /media/input.mp4 ci-ssai.hang false 15446 true 3 false 6 false
+
+          ok=false
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:15446/announced 2>/dev/null | grep -q "ci-ssai.hang"; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "SSAI broadcast never announced"; docker logs ci-ssai; exit 1
+          fi
+
+          # Confirms impression-tracker.mjs's passthrough left the fmp4 stream
+          # byte-for-byte parseable by moq-cli, the same catalog shape as the
+          # plain base pipeline above.
+          curl -sf http://localhost:15446/fetch/ci-ssai.hang/catalog.json -o /tmp/ssai-catalog.json
+          node -e "
+            const c = JSON.parse(require('fs').readFileSync('/tmp/ssai-catalog.json'));
+            if (!c.video?.renditions || Object.keys(c.video.renditions).length === 0) {
+              throw new Error('no video rendition in catalog: ' + JSON.stringify(c));
+            }
+          "
+
+          # Ad normalization + splicing run in ffmpeg realtime filters (no fixed
+          # sleep would be reliable here, same reasoning as the CSAI/SGAI steps
+          # above), so poll container logs for the full quartile sequence
+          # instead of a single fixed wait.
+          PATTERNS=(
+            "SSAI: normalizing ad to content profile"
+            "adBreakEvery=3 adBreakLength="
+            "break=0 | start"
+            "break=0 | first_quartile"
+            "break=0 | midpoint"
+            "break=0 | third_quartile"
+            "break=0 | complete"
+          )
+          for _ in $(seq 1 90); do
+            all_found=true
+            for pattern in "${PATTERNS[@]}"; do
+              docker logs ci-ssai 2>&1 | grep -qF "$pattern" || all_found=false
+            done
+            [ "$all_found" = true ] && break
+            sleep 1
+          done
+
+          fail=0
+          for pattern in "${PATTERNS[@]}"; do
+            if ! docker logs ci-ssai 2>&1 | grep -qF "$pattern"; then
+              echo "MISSING expected log line: $pattern"
+              fail=1
+            fi
+          done
+          [ "$fail" -ne 0 ] && docker logs ci-ssai
+          docker rm -f ci-ssai
+          exit "$fail"
 
       - name: Smoke test -- CSAI (SCTE-35 injection)
         run: |
