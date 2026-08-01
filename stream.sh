@@ -138,7 +138,7 @@ CONTAINER_NAME="moq-lab-$$"
 cleanup() { docker rm -f "$CONTAINER_NAME" 2>/dev/null || true; }
 trap cleanup EXIT
 
-echo "Building sandbox image (ffmpeg + moq)... first build compiles moq/moq-relay from source, can take a few minutes"
+echo "Building sandbox image (ffmpeg + moq)... moq/moq-relay are downloaded as prebuilt binaries, first build should only take a few seconds beyond the base image pull"
 docker build -t "$IMAGE" "$MOQ_DIR"
 
 if [ "$ABR_LADDER" = true ]; then
