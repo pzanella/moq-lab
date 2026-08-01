@@ -17,27 +17,40 @@ importers:
         specifier: 0.2.0
         version: 0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)
       '@moq/net':
-        specifier: 0.2.0
-        version: 0.2.0(zod@4.4.3)
+        specifier: 0.2.1
+        version: 0.2.1(zod@4.4.3)
       ws:
         specifier: ^8.21.1
         version: 8.21.1
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      '@astronautlabs/scte35':
+        specifier: 0.1.1
+        version: 0.1.1
+      reflect-metadata:
+        specifier: ^0.2.2
+        version: 0.2.2
 
 packages:
+
+  '@astronautlabs/bitstream@2.1.2':
+    resolution: {integrity: sha512-aK1euTvHyhCYxdjmTwtWtB9vPcYcUEut5Oypv0o2FktwY1eDHGA0CSuRBg3W1TWBFOxpCBhNo4L2mguJOy6fSQ==}
+
+  '@astronautlabs/scte35@0.1.1':
+    resolution: {integrity: sha512-7B0P2vra+taokVOgHZwYPZWZ7aiIw/wJ+/LlOtvL1ww6gKXTVDpd3rEzi0eWLE0NhSdVXQUHqEwbggAHPkPkJg==}
 
   '@moq/msf@0.2.0':
     resolution: {integrity: sha512-gTeWd5/NpzxbYw9Cf8OfE+ltb6e4tNUXzUc+CkXgPRpT9BvRoE+4vYivhpFNd/M9+sTgqQtU2pK91VPbzbbrIg==}
 
-  '@moq/net@0.2.0':
-    resolution: {integrity: sha512-MlYGgjl6YJbbzqkQ4f+mLadp0V76ZRYZS9JXsyP1qI1k3L/KVzQCg81L6Yi6PVQMrrq5ZRf7Ep8KvNyojy2cCQ==}
+  '@moq/net@0.2.1':
+    resolution: {integrity: sha512-NAZexeNYKk7LHQpTmum0qJbgRCVmnUoth4VRzIJ1gpWh2i7he/XvxgVHee+8hMS86IY/tw/O5C3oFZwn16d90g==}
     peerDependencies:
       zod: ^4.0.0
 
-  '@moq/qmux@0.3.1':
-    resolution: {integrity: sha512-0bSa8S8Mpr6J/kM94MgPRCPefmLhFwMzkFpNsu873SuS5Jne4oYzXoud/5tyDDoS5JAXb1/KBOBrim55qSrViA==}
+  '@moq/qmux@0.3.2':
+    resolution: {integrity: sha512-8ymBriVxvD5ISfnTJ3k07Zzt4pBOoh/JnulGCjenY2NrUdCr5PUOy42y/9drSXA3SfCfOdaw4A+BSrWN92qVvg==}
 
   '@moq/signals@0.2.0':
     resolution: {integrity: sha512-BwmoJFoSIpkeRczGrNpNHWQTYelOwxuDkJvy9wrQGQn5ltl9vKifhWMpE8dlOgQigdGtwn9lOFkzOxLA0jZWmQ==}
@@ -59,6 +72,9 @@ packages:
   async-mutex@0.5.0:
     resolution: {integrity: sha512-1A94B18jkJ3DYq284ohPxoXbfTA5HsQ7/Mf4DEhcyLx3Bz27Rh59iScbB6EPiP+B+joue6YCxcMXSbFC1tZKwA==}
 
+  reflect-metadata@0.2.2:
+    resolution: {integrity: sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==}
+
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
@@ -79,18 +95,24 @@ packages:
 
 snapshots:
 
+  '@astronautlabs/bitstream@2.1.2': {}
+
+  '@astronautlabs/scte35@0.1.1':
+    dependencies:
+      '@astronautlabs/bitstream': 2.1.2
+
   '@moq/msf@0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)':
     dependencies:
-      '@moq/net': 0.2.0(zod@4.4.3)
+      '@moq/net': 0.2.1(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@types/react'
       - react
       - solid-js
 
-  '@moq/net@0.2.0(zod@4.4.3)':
+  '@moq/net@0.2.1(zod@4.4.3)':
     dependencies:
-      '@moq/qmux': 0.3.1
+      '@moq/qmux': 0.3.2
       '@moq/signals': 0.2.0
       async-mutex: 0.5.0
       zod: 4.4.3
@@ -99,7 +121,7 @@ snapshots:
       - react
       - solid-js
 
-  '@moq/qmux@0.3.1':
+  '@moq/qmux@0.3.2':
     dependencies:
       '@moq/web-socket-stream': 0.1.1
 
@@ -110,6 +132,8 @@ snapshots:
   async-mutex@0.5.0:
     dependencies:
       tslib: 2.8.1
+
+  reflect-metadata@0.2.2: {}
 
   tslib@2.8.1: {}
 

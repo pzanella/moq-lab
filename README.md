@@ -270,6 +270,29 @@ Press `Ctrl+C` to stop the stream.
 
 ## 5. SSAI: ad insertion and impression tracking
 
+**Architecture note — shared/linear, not per-session.** This sandbox's SSAI
+splices one ad break into one continuously-looping stream, shared by every
+viewer who subscribes to the broadcast — the same model as a linear TV
+channel's server-side ad insertion. Every viewer sees the same ad at the
+same point, and there is no per-viewer ad selection. This is *not* the
+"per-session" model most production SSAI (Yospace, FreeWheel/GAM DAI-style)
+uses today, where each viewer session gets its own manifest/stream stitched
+with ads selected for that specific viewer (targeting, frequency capping,
+personalized creative). Trade-offs:
+
+| | Shared/linear (this repo) | Per-session (industry standard) |
+|---|---|---|
+| Ad selection | One ad for all viewers | Selected per viewer/session |
+| Server cost | One encode/stitch, fans out to N viewers | One stitched output per session |
+| Targeting, frequency capping | Not possible | Core use case |
+| Complexity | Low — matches this sandbox's scope | Requires per-session ad decisioning + stitching at scale |
+
+Extending this to per-session SSAI is a real architectural change (session
+state, per-viewer stitching or manifest manipulation), not a flag — it's not
+implemented here. SGAI's `--personalized-ads`/`%token%` mechanism (section 7)
+addresses personalization for the *signaling* path, not for SSAI's spliced
+stream.
+
 When you pass `--ssai-mode`, the pipeline works like this:
 
 ```
@@ -642,8 +665,8 @@ adds the SSAI/CSAI/SGAI ad-insertion handling around it.
 Versions are pinned deliberately, not left floating — both sides move fast
 enough (weekly-ish point releases, occasional breaking changes) that an
 unpinned `cargo install`/`npm install` can silently pick up different
-behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.9.3`/`0.14.3`
-([Dockerfile](Dockerfile)), `@moq/net`/`@moq/msf` `0.2.0`
+behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.9.4`/`0.14.4`
+([Dockerfile](Dockerfile)), `@moq/net` `0.2.1`/`@moq/msf` `0.2.0`
 ([package.json](package.json)). Bump the Rust and JS sides together and
 re-test rather than upgrading one at a time — see
 [CONTRIBUTING.md](CONTRIBUTING.md).

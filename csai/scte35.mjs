@@ -1,6 +1,6 @@
 // SCTE-35 splice_info_section encoder — builds real, spec-compliant binary
 // cues (time_signal + segmentation_descriptor) for the CSAI sandbox.
-// Reference: ANSI/SCTE 35, sections 9.2 (splice_info_section), 9.3.4
+// Reference: SCTE 35-1, sections 9.2 (splice_info_section), 9.3.4
 // (time_signal), 10.3.3 (segmentation_descriptor). CRC-32 is the same
 // MPEG-2 variant used by PSI tables (poly 0x04C11DB7, no reflect, init/xorout 0).
 

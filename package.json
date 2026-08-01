@@ -23,11 +23,15 @@
   },
   "dependencies": {
     "@moq/msf": "0.2.0",
-    "@moq/net": "0.2.0",
+    "@moq/net": "0.2.1",
     "ws": "^8.21.1",
     "zod": "^4.4.3"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@astronautlabs/scte35": "0.1.1",
+    "reflect-metadata": "^0.2.2"
   }
 }
