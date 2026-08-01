@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Shellcheck
         uses: ludeeus/action-shellcheck@2.0.0
@@ -42,7 +42,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install pnpm dependencies
         run: |
@@ -148,24 +148,25 @@ jobs:
           done
           exit "$fail"
 
-  # Builds the real sandbox image and drives the base, SSAI, CSAI, and SGAI
-  # pipelines end to end against a synthetic clip, checking the relay's HTTP
-  # API the same way a human would with curl (see README.md section 8). SGAI
-  # here also covers the Media Timeline, which needs a real content broadcast
-  # to observe.
-  smoke-test-docker:
+  # These jobs build the real sandbox image and drive the base, SSAI, CSAI,
+  # and SGAI pipelines end to end against a synthetic clip, checking the
+  # relay's HTTP API the same way a human would with curl (see README.md
+  # section 8). SGAI here also covers the Media Timeline, which needs a
+  # real content broadcast to observe.
+  #
+  # Split into one job per pipeline mode (instead of one "smoke-test-docker"
+  # job with five sequential steps) so each mode shows up as its own check
+  # in the PR / Actions UI, and a failure in one doesn't block the others
+  # from reporting. The image and synthetic clip are built once in
+  # smoke-test-docker-build and shared via artifacts -- rebuilding the same
+  # image five times duplicated both the YAML and the actual work (apt-get,
+  # ffmpeg encode, docker build). Update any branch protection rule that
+  # referenced the old "smoke-test-docker" check name to require the jobs
+  # below instead.
+  smoke-test-docker-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install pnpm dependencies
-        run: |
-          corepack enable
-          pnpm install
 
       - name: Generate a tiny synthetic test clip
         run: |
@@ -180,6 +181,42 @@ jobs:
 
       - name: Build the sandbox image
         run: docker build -t moq-lab .
+
+      - name: Save the image for downstream jobs
+        run: docker save moq-lab | gzip > /tmp/moq-lab-image.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moq-lab-image
+          path: /tmp/moq-lab-image.tar.gz
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moq-lab-assets
+          path: assets/
+          retention-days: 1
+
+  smoke-test-docker-base:
+    needs: smoke-test-docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
 
       - name: Smoke test -- base pipeline (no ads)
         run: |
@@ -207,6 +244,31 @@ jobs:
             }
           "
           docker rm -f ci-base
+
+  smoke-test-docker-ssai:
+    needs: smoke-test-docker-build
+    runs-on: ubuntu-latest
+    steps:
+      # ssai/impression-tracker.ci-check.mjs below is a repo script, unlike
+      # the inline `node -e` checks in the other pipeline-mode jobs.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
 
       - name: Smoke test -- SSAI (ad splicing + impression tracking, 2 passes)
         run: |
@@ -263,6 +325,27 @@ jobs:
             exit 1
           fi
           docker rm -f ci-ssai
+
+  smoke-test-docker-ssai-abr:
+    needs: smoke-test-docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
 
       - name: Smoke test -- SSAI + ABR ladder (5-rendition ladder combined with ad splicing)
         run: |
@@ -336,6 +419,27 @@ jobs:
           docker rm -f ci-ssai-abr
           exit "$fail"
 
+  smoke-test-docker-csai:
+    needs: smoke-test-docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
+
       - name: Smoke test -- CSAI (SCTE-35 injection + in-band Program Blackout Override)
         run: |
           # Positions 9/10 (SGAI, ad-broadcast) are unused here; 11/12 fire a
@@ -401,6 +505,37 @@ jobs:
           fi
 
           docker rm -f ci-csai
+
+  smoke-test-docker-sgai:
+    needs: smoke-test-docker-build
+    runs-on: ubuntu-latest
+    steps:
+      # sgai/ad-decisioning-publisher.mjs and sgai/debug-subscriber.mjs below
+      # are repo scripts that need node_modules, unlike the inline `node -e`
+      # checks in the other pipeline-mode jobs.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm dependencies
+        run: |
+          corepack enable
+          pnpm install
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
 
       - name: Smoke test -- SGAI (Media Timeline, blackout, ad personalization)
         run: |
