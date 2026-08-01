@@ -223,8 +223,8 @@ uses a different pipeline.
 | `--csai-mode` | off | Add a Break Start/Break End SCTE-35 track; no ad video is interleaved |
 | `--ad-break-length N` | `6` | CSAI only: seconds between Break Start and Break End |
 | `--sgai-mode` | off | Publish content, ad, and Event Timeline signaling as independent broadcasts |
-| `--blackout-at N` | off | SGAI only: fire a one-shot Program Blackout Override N seconds in |
-| `--blackout-length N` | `10` | SGAI only: seconds until the blackout restores |
+| `--blackout-at N` | off | CSAI or SGAI: fire a one-shot Program Blackout Override N seconds in |
+| `--blackout-length N` | `10` | CSAI or SGAI: seconds until the blackout restores |
 | `--personalized-ads` | off | SGAI only: template ad upids with a `%token%` placeholder |
 
 ### npm/pnpm shortcut
@@ -406,6 +406,8 @@ packet is passed through unchanged, except:
   Because this reads real timestamps rather than the wall clock, cues stay
   accurate even if `ffmpeg` falls behind real-time under load (e.g. a heavy
   `--abr-ladder` encode).
+- Optionally (`--blackout-at`), a one-shot Program Blackout Override (`0x18`)
+  cue — see "Regional blackout" below.
 
 ```
 [CSAI] 2026-07-15T14:03:44.722Z Break Start (event_id=0x3e8, pts=2702250, pid=496)
@@ -418,6 +420,48 @@ You can inspect the raw SCTE-35 track directly over HTTP:
 # raw SCTE-35 bytes as they arrive on the wire
 curl -s http://localhost:4443/fetch/bbb.hang/0.ts | xxd
 ```
+
+### Regional blackout
+
+`--blackout-at N` (CSAI or SGAI) fires a one-shot **Program Blackout
+Override** cue `N` seconds into the run, followed `--blackout-length` seconds
+later (default `10`) by a restore cue. In CSAI this is the same
+`segmentation_type_id: 0x18` descriptor as SGAI's Event Timeline record (section
+7's "Regional blackout") — same delivery/blackout flags
+(`no_regional_blackout_flag`/`web_delivery_allowed_flag`/`archive_allowed_flag`/`device_restrictions`)
+and the same alternate-content URI carried as a `0x0F`-typed
+`segmentation_upid` — but encoded as a real, CRC-valid `splice_info_section`
+on the SCTE-35 PID (`csai/scte35.mjs`'s `buildProgramBlackoutOverrideSection`)
+instead of published as JSON. There's no separate signaling broadcast to
+subscribe to: a real affiliate headend already parsing the Break Start/End
+track for splice points sees the same `0x18` type ID show up in-band and
+switches to alternate content on the first cue, back to the normal feed on
+the second.
+
+```bash
+./stream.sh bbb --csai-mode --blackout-at 20 --blackout-length 10
+```
+
+```
+[CSAI] 2026-07-15T14:03:49.011Z Program Blackout Override -- ENFORCE (event_id=0x1388, pts=1802250, alt=moqt://localhost/blackout-alt-content.hang, pid=496)
+[CSAI] 2026-07-15T14:03:59.014Z Program Blackout Override -- RESTORE (event_id=0x1388, pts=2702475, pid=496)
+```
+
+### MoQ-native CSAI (architectural idea, not implemented)
+
+Everything above still round-trips SCTE-35 through the same binary
+`splice_info_section` encoding a legacy MPEG-TS/broadcast pipeline expects —
+that's the point of CSAI (section 6's whole premise is decisioning happens
+client-side, but the *signal* stays in the format an existing SCTE-35-aware
+client already parses). A MoQ-native variant of CSAI is a different idea,
+not built here: reuse SGAI's transport — the same `org.scte.scte35.v1` JSON
+Event Timeline track, `@moq/msf` catalog, and Media Timeline
+(section 7) — but leave the ad-break/blackout *decision* to the client
+instead of an affiliate headend acting on it server-side. That would collapse
+CSAI and SGAI into one signaling transport differing only in who
+decides (client vs. server-guided), at the cost of losing CSAI's actual
+purpose here: exercising the legacy binary SCTE-35 path end to end. Noted as
+a possible future direction, not a gap in the current sandbox.
 
 ---
 

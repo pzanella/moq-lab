@@ -7,6 +7,7 @@
 export const SEGMENTATION_TYPE = {
     BREAK_START: 0x22,
     BREAK_END: 0x23,
+    PROGRAM_BLACKOUT_OVERRIDE: 0x18,
 };
 
 const CUEI_IDENTIFIER = 0x43554549; // 'CUEI'
@@ -72,7 +73,18 @@ export function crc32Mpeg2(buf) {
     return crc >>> 0;
 }
 
-function segmentationDescriptor({ segmentationEventId, segmentationTypeId }) {
+// Flags default to Break Start/End's values (restrictions apply, no UPID);
+// only buildProgramBlackoutOverrideSection overrides them.
+function segmentationDescriptor({
+    segmentationEventId,
+    segmentationTypeId,
+    deliveryNotRestrictedFlag = false,
+    webDeliveryAllowedFlag = false,
+    noRegionalBlackoutFlag = false,
+    archiveAllowedFlag = false,
+    deviceRestrictions = 0b00,
+    upidUri = null,
+}) {
     const w = new BitWriter();
     w.writeBits(CUEI_IDENTIFIER, 32);
     w.writeBits(segmentationEventId, 32);
@@ -81,14 +93,16 @@ function segmentationDescriptor({ segmentationEventId, segmentationTypeId }) {
 
     w.writeBits(1, 1); // program_segmentation_flag: whole program, no component list
     w.writeBits(0, 1); // segmentation_duration_flag: not signaled
-    w.writeBits(0, 1); // delivery_not_restricted_flag: restrictions below DO apply
-    w.writeBits(0, 1); // web_delivery_allowed_flag
-    w.writeBits(0, 1); // no_regional_blackout_flag
-    w.writeBits(0, 1); // archive_allowed_flag
-    w.writeBits(0b00, 2); // device_restrictions: 00 = "Restrict Group 0"
+    w.writeBits(deliveryNotRestrictedFlag ? 1 : 0, 1);
+    w.writeBits(webDeliveryAllowedFlag ? 1 : 0, 1);
+    w.writeBits(noRegionalBlackoutFlag ? 1 : 0, 1);
+    w.writeBits(archiveAllowedFlag ? 1 : 0, 1);
+    w.writeBits(deviceRestrictions & 0b11, 2);
 
-    w.writeBits(0x00, 8); // segmentation_upid_type: not used
-    w.writeBits(0, 8); // segmentation_upid_length
+    const upidBytes = upidUri ? Buffer.from(upidUri, "utf8") : Buffer.alloc(0);
+    w.writeBits(upidUri ? 0x0f : 0x00, 8); // segmentation_upid_type: 0x0F = URI, 0x00 = not used
+    w.writeBits(upidBytes.length, 8); // segmentation_upid_length
+    for (const byte of upidBytes) w.writeBits(byte, 8);
     w.writeBits(segmentationTypeId, 8);
     w.writeBits(0, 8); // segment_num
     w.writeBits(0, 8); // segments_expected
@@ -104,12 +118,14 @@ function segmentationDescriptor({ segmentationEventId, segmentationTypeId }) {
  *
  * @param {object} opts
  * @param {number} opts.segmentationEventId - 32-bit event id (unique per Break Start/End pair)
- * @param {number} opts.segmentationTypeId - SEGMENTATION_TYPE.BREAK_START or BREAK_END
+ * @param {number} opts.segmentationTypeId - a SEGMENTATION_TYPE value
  * @param {bigint} opts.ptsTime - 33-bit PTS (90kHz ticks) the cue applies at
+ * Any other properties (delivery/blackout flags, UPID) are forwarded as-is to
+ * segmentationDescriptor() -- see buildProgramBlackoutOverrideSection.
  * @returns {Buffer}
  */
-export function buildTimeSignalSection({ segmentationEventId, segmentationTypeId, ptsTime }) {
-    const descriptor = segmentationDescriptor({ segmentationEventId, segmentationTypeId });
+export function buildTimeSignalSection({ segmentationEventId, segmentationTypeId, ptsTime, ...descriptorFlags }) {
+    const descriptor = segmentationDescriptor({ segmentationEventId, segmentationTypeId, ...descriptorFlags });
 
     const spliceCommand = new BitWriter();
     spliceCommand.writeBits(1, 1); // time_specified_flag
@@ -152,4 +168,31 @@ export function buildTimeSignalSection({ segmentationEventId, segmentationTypeId
     crcBuf.writeUInt32BE(crc, 0);
 
     return Buffer.concat([withoutCrc, crcBuf]);
+}
+
+/**
+ * Builds a Program Blackout Override splice_info_section -- the binary
+ * counterpart of sgai/event-timeline.mjs's programBlackoutOverride. Call
+ * twice with the same segmentationEventId: blackedOut: true (+ alternateUpid)
+ * to start, blackedOut: false to restore.
+ *
+ * @param {object} opts
+ * @param {number} opts.segmentationEventId - 32-bit event id (same value for the start/end pair)
+ * @param {bigint} opts.ptsTime - 33-bit PTS (90kHz ticks) the cue applies at
+ * @param {boolean} opts.blackedOut - true to enforce, false to restore
+ * @param {string} [opts.alternateUpid] - URI of alternate content; only encoded when blackedOut
+ * @returns {Buffer}
+ */
+export function buildProgramBlackoutOverrideSection({ segmentationEventId, ptsTime, blackedOut, alternateUpid }) {
+    return buildTimeSignalSection({
+        segmentationEventId,
+        segmentationTypeId: SEGMENTATION_TYPE.PROGRAM_BLACKOUT_OVERRIDE,
+        ptsTime,
+        deliveryNotRestrictedFlag: false,
+        webDeliveryAllowedFlag: true,
+        noRegionalBlackoutFlag: !blackedOut,
+        archiveAllowedFlag: true,
+        deviceRestrictions: 0b11,
+        upidUri: blackedOut ? (alternateUpid ?? null) : null,
+    });
 }

@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 // CSAI SCTE-35 injector — transparent MPEG-TS proxy.
-// Usage: ffmpeg ... -f mpegts - | node ts-injector.mjs <adBreakEvery> <adBreakLength> | moq ... import ts
+// Usage: ffmpeg ... -f mpegts - |
+//   node ts-injector.mjs <adBreakEvery> <adBreakLength> [blackoutAt] [blackoutLength] [blackoutAltUpid] |
+//   moq ... import ts
 //
 // Passes every TS packet from ffmpeg to stdout unchanged, except the PMT,
 // which is rewritten (once per repetition) to add a private "SCTE-35" stream
 // (stream_type 0x06, CUEI registration descriptor) on a synthesized PID. It
-// also injects real, CRC-valid SCTE-35 Break Start / Break End cues
-// (splice_info_section, PES stream_id 0xFC per SCTE-35 sec. 9.7) on that PID —
-// see scte35.mjs for the section encoder. Cue timing is driven by the video
-// elementary stream's own PES decode timestamps (DTS, falling back to PTS for
-// frames without B-reordering), not the wall clock -- accurate even if ffmpeg
-// falls behind real-time under load (e.g. a heavy --abr-ladder encode).
+// also injects real, CRC-valid SCTE-35 cues (splice_info_section, PES
+// stream_id 0xFC per SCTE-35 sec. 9.7) on that PID — Break Start/End
+// (`0x22`/`0x23`) on the `adBreakEvery`/`adBreakLength` schedule, plus an
+// optional one-shot Program Blackout Override (`0x18`) if `blackoutAt` is
+// set. See scte35.mjs for both encoders. Cue timing is driven by the video
+// elementary stream's own PES decode timestamps (DTS, falling back to PTS
+// for frames without B-reordering), not the wall clock -- accurate even if
+// ffmpeg falls behind real-time under load (e.g. a heavy --abr-ladder encode).
 //
 // This is the MPEG-TS analog of ../ssai/impression-tracker.mjs (which does the
 // same transparent-proxy trick for fMP4 boxes, reading tfdt instead of PES
 // timestamps); the two are independent and never run together — SSAI uses
 // fmp4/moq import fmp4, CSAI uses ts/moq import ts.
-import { buildTimeSignalSection, crc32Mpeg2, SEGMENTATION_TYPE } from "./scte35.mjs";
+import { buildTimeSignalSection, buildProgramBlackoutOverrideSection, crc32Mpeg2, SEGMENTATION_TYPE } from "./scte35.mjs";
 import { createLogger } from "../lib/log.mjs";
 
 const log = createLogger("CSAI");
@@ -35,6 +39,21 @@ if (!Number.isFinite(AD_BREAK_EVERY) || AD_BREAK_EVERY <= 0) {
 }
 if (!Number.isFinite(AD_BREAK_LENGTH) || AD_BREAK_LENGTH <= 0) {
     process.stderr.write(`[CSAI] error: invalid adBreakLength: ${process.argv[3]}\n`);
+    process.exit(1);
+}
+
+// Off unless blackoutAt (argv[4]) is a non-empty value -- run-stream.sh always
+// passes this positionally, empty when --blackout-at wasn't given.
+const BLACKOUT_AT = process.argv[4] !== undefined && process.argv[4] !== "" ? Number(process.argv[4]) : null;
+const BLACKOUT_LENGTH = Number(process.argv[5] ?? 10);
+const BLACKOUT_ALT_UPID = process.argv[6] || "moqt://localhost/blackout-alt-content.hang";
+const BLACKOUT_EVENT_ID = 5000; // matches sgai/ad-decisioning-publisher.mjs's BLACKOUT_EVENT_ID
+if (BLACKOUT_AT !== null && (!Number.isFinite(BLACKOUT_AT) || BLACKOUT_AT < 0)) {
+    process.stderr.write(`[CSAI] error: invalid blackoutAt: ${process.argv[4]}\n`);
+    process.exit(1);
+}
+if (BLACKOUT_AT !== null && (!Number.isFinite(BLACKOUT_LENGTH) || BLACKOUT_LENGTH <= 0)) {
+    process.stderr.write(`[CSAI] error: invalid blackoutLength: ${process.argv[5]}\n`);
     process.exit(1);
 }
 
@@ -232,17 +251,22 @@ function augmentedPmtBytes(continuityCounter) {
     return packetizeSection({ pid: pmtPid, continuityCounter, section });
 }
 
-// Break Start / Break End scheduling — driven by the video elementary stream's
-// own decode timestamps (see extractVideoDecodeTime above), the same approach
-// ssai/impression-tracker.mjs uses via tfdt. Accurate regardless of whether
-// ffmpeg is keeping up with real time.
+// Break Start / Break End / Program Blackout Override scheduling — driven by
+// the video elementary stream's own decode timestamps (see
+// extractVideoDecodeTime above), the same approach ssai/impression-tracker.mjs
+// uses via tfdt. Accurate regardless of whether ffmpeg is keeping up with real
+// time.
 const CYCLE_SECS = AD_BREAK_EVERY + AD_BREAK_LENGTH;
-let pendingCue = null; // Buffer[] of TS packets waiting to be spliced in after the current packet
+// Queued TS packets to splice in after the current packet -- an array, not a
+// single slot, since a Break cue and the blackout cue can share a tick.
+let pendingCues = [];
 
 let lastPts = -1;
 let ptsBase = 0;
 let lastCycleIndex = -1;
 const startFired = new Set();
+let blackoutStartFired = false;
+let blackoutEndFired = false;
 
 function onVideoDecodeTime(pts) {
     // Detect a PTS reset (e.g. ffmpeg's -stream_loop wrapping back to the start).
@@ -261,20 +285,30 @@ function onVideoDecodeTime(pts) {
     // Guarded on startFired so we never emit an End without a matching Start
     // (e.g. if playback picks up mid-cycle).
     if (lastCycleIndex >= 0 && cycleIndex > lastCycleIndex && startFired.has(lastCycleIndex)) {
-        fireCue(SEGMENTATION_TYPE.BREAK_END, 1000 + lastCycleIndex, "Break End", streamSecs);
+        fireBreakCue(SEGMENTATION_TYPE.BREAK_END, 1000 + lastCycleIndex, "Break End", streamSecs);
     }
     lastCycleIndex = cycleIndex;
 
     if (cyclePos >= AD_BREAK_EVERY && !startFired.has(cycleIndex)) {
         startFired.add(cycleIndex);
-        fireCue(SEGMENTATION_TYPE.BREAK_START, 1000 + cycleIndex, "Break Start", streamSecs);
+        fireBreakCue(SEGMENTATION_TYPE.BREAK_START, 1000 + cycleIndex, "Break Start", streamSecs);
+    }
+
+    // One-shot regional blackout, independent of the Break Start/End cadence above.
+    if (BLACKOUT_AT !== null) {
+        if (!blackoutStartFired && streamSecs >= BLACKOUT_AT) {
+            blackoutStartFired = true;
+            fireBlackoutCue({ blackedOut: true, alternateUpid: BLACKOUT_ALT_UPID }, streamSecs);
+        }
+        if (!blackoutEndFired && streamSecs >= BLACKOUT_AT + BLACKOUT_LENGTH) {
+            blackoutEndFired = true;
+            fireBlackoutCue({ blackedOut: false }, streamSecs);
+        }
     }
 }
 
-function fireCue(segmentationTypeId, segmentationEventId, label, streamSecs) {
+function enqueueCue(section, label) {
     if (scte35Pid === null) return; // PMT not seen yet; drop rather than block startup
-    const ptsTime = BigInt(Math.round(streamSecs * 90000)) % 2n ** 33n;
-    const section = buildTimeSignalSection({ segmentationEventId, segmentationTypeId, ptsTime });
     const pes = buildScte35Pes(section);
     const packets = [];
     // Our sections are always small enough for one PES/TS packet (see packetizePes);
@@ -286,8 +320,23 @@ function fireCue(segmentationTypeId, segmentationEventId, label, streamSecs) {
         scte35Cc = (scte35Cc + 1) & 0x0f;
         offset += 184;
     }
-    pendingCue = Buffer.concat(packets);
-    log(`${label} (event_id=0x${segmentationEventId.toString(16)}, pts=${ptsTime}, pid=${scte35Pid})`);
+    pendingCues.push(Buffer.concat(packets));
+    log(label);
+}
+
+function fireBreakCue(segmentationTypeId, segmentationEventId, label, streamSecs) {
+    const ptsTime = BigInt(Math.round(streamSecs * 90000)) % 2n ** 33n;
+    const section = buildTimeSignalSection({ segmentationEventId, segmentationTypeId, ptsTime });
+    enqueueCue(section, `${label} (event_id=0x${segmentationEventId.toString(16)}, pts=${ptsTime}, pid=${scte35Pid})`);
+}
+
+function fireBlackoutCue({ blackedOut, alternateUpid }, streamSecs) {
+    const ptsTime = BigInt(Math.round(streamSecs * 90000)) % 2n ** 33n;
+    const section = buildProgramBlackoutOverrideSection({ segmentationEventId: BLACKOUT_EVENT_ID, ptsTime, blackedOut, alternateUpid });
+    const label = blackedOut
+        ? `Program Blackout Override -- ENFORCE (event_id=0x${BLACKOUT_EVENT_ID.toString(16)}, pts=${ptsTime}, alt=${alternateUpid}, pid=${scte35Pid})`
+        : `Program Blackout Override -- RESTORE (event_id=0x${BLACKOUT_EVENT_ID.toString(16)}, pts=${ptsTime}, pid=${scte35Pid})`;
+    enqueueCue(section, label);
 }
 
 let leftover = Buffer.alloc(0);
@@ -358,10 +407,8 @@ process.stdin.on("data", (chunk) => {
         handlePacket(leftover.subarray(offset, offset + TS_PACKET_SIZE));
         offset += TS_PACKET_SIZE;
 
-        if (pendingCue) {
-            process.stdout.write(pendingCue);
-            pendingCue = null;
-        }
+        for (const cue of pendingCues) process.stdout.write(cue);
+        pendingCues.length = 0;
     }
     leftover = leftover.subarray(offset);
 });
@@ -376,4 +423,7 @@ process.stdin.on("error", (err) => {
     process.exit(1);
 });
 
-log(`adBreakEvery=${AD_BREAK_EVERY} adBreakLength=${AD_BREAK_LENGTH}`);
+log(
+    `adBreakEvery=${AD_BREAK_EVERY} adBreakLength=${AD_BREAK_LENGTH}` +
+        (BLACKOUT_AT !== null ? ` blackoutAt=${BLACKOUT_AT} blackoutLength=${BLACKOUT_LENGTH}` : ""),
+);

@@ -13,9 +13,22 @@
 // descriptor instead of what the subclass implies.
 import "reflect-metadata";
 import { TimeSignalSplice, NewSegmentationDescriptor, SpliceTime } from "@astronautlabs/scte35";
-import { SEGMENTATION_TYPE, buildTimeSignalSection } from "./scte35.mjs";
+import { SEGMENTATION_TYPE, buildTimeSignalSection, buildProgramBlackoutOverrideSection } from "./scte35.mjs";
 
-function buildReference({ segmentationEventId, segmentationTypeId, ptsTime }) {
+// Defaults match Break Start/End's all-zero delivery/blackout flags and empty UPID;
+// the Program Blackout Override vectors below override them.
+function buildReference({
+    segmentationEventId,
+    segmentationTypeId,
+    ptsTime,
+    deliveryNotRestricted = false,
+    webDeliveryAllowed = false,
+    noRegionalBlackout = false,
+    archiveAllowed = false,
+    deviceRestrictions = 0,
+    upidType = 0,
+    upid = new Uint8Array(0),
+}) {
     const descriptor = new NewSegmentationDescriptor();
     descriptor.tag = 0x02; // SPLICE_DESCRIPTOR_SEGMENTATION variant discriminator
     descriptor.identifier = "CUEI";
@@ -24,14 +37,15 @@ function buildReference({ segmentationEventId, segmentationTypeId, ptsTime }) {
     descriptor.canceled = false;
     descriptor.hasProgram = true;
     descriptor.hasDuration = false;
-    descriptor.deliveryNotRestricted = false;
-    descriptor.webDeliveryAllowed = false;
-    descriptor.noRegionalBlackout = false;
-    descriptor.archiveAllowed = false;
-    descriptor.deviceRestrictions = 0;
+    descriptor.deliveryNotRestricted = deliveryNotRestricted;
+    descriptor.webDeliveryAllowed = webDeliveryAllowed;
+    descriptor.noRegionalBlackout = noRegionalBlackout;
+    descriptor.archiveAllowed = archiveAllowed;
+    descriptor.deviceRestrictions = deviceRestrictions;
     descriptor.components = [];
-    descriptor.upidType = 0;
-    descriptor.upid = new Uint8Array(0);
+    descriptor.upidType = upidType;
+    descriptor.upidLength = upid.length; // drives the upid field's own bit length -- see syntax.d.ts
+    descriptor.upid = upid;
     descriptor.typeId = segmentationTypeId;
     descriptor.segmentNumber = 0;
     descriptor.segmentsExpected = 0;
@@ -75,14 +89,50 @@ const VECTORS = [
     { segmentationEventId: 0x3e8, segmentationTypeId: SEGMENTATION_TYPE.BREAK_END, ptsTime: 3242250n },
     { segmentationEventId: 1, segmentationTypeId: SEGMENTATION_TYPE.BREAK_START, ptsTime: 2n ** 33n - 1n }, // max 33-bit PTS
     { segmentationEventId: 0, segmentationTypeId: SEGMENTATION_TYPE.BREAK_END, ptsTime: 0n },
+    // Program Blackout Override (0x18) -- exercises the delivery/blackout flags
+    // and the URI-typed UPID, neither of which Break Start/End ever touch.
+    {
+        segmentationEventId: 5000,
+        segmentationTypeId: SEGMENTATION_TYPE.PROGRAM_BLACKOUT_OVERRIDE,
+        ptsTime: 2702250n,
+        blackout: { blackedOut: true, alternateUpid: "moqt://localhost/blackout-alt-content.hang" },
+    },
+    {
+        segmentationEventId: 5000,
+        segmentationTypeId: SEGMENTATION_TYPE.PROGRAM_BLACKOUT_OVERRIDE,
+        ptsTime: 3242250n,
+        blackout: { blackedOut: false },
+    },
 ];
 
 let fail = 0;
 for (const vector of VECTORS) {
-    const ours = buildTimeSignalSection(vector);
-    const theirs = buildReference(vector);
+    const { segmentationEventId, segmentationTypeId, ptsTime, blackout } = vector;
+
+    let ours;
+    let theirs;
+    if (blackout) {
+        ours = buildProgramBlackoutOverrideSection({ segmentationEventId, ptsTime, ...blackout });
+        const upidUri = blackout.blackedOut ? blackout.alternateUpid : undefined;
+        theirs = buildReference({
+            segmentationEventId,
+            segmentationTypeId,
+            ptsTime,
+            deliveryNotRestricted: false,
+            webDeliveryAllowed: true,
+            noRegionalBlackout: !blackout.blackedOut,
+            archiveAllowed: true,
+            deviceRestrictions: 0b11,
+            upidType: upidUri ? 0x0f : 0,
+            upid: upidUri ? new TextEncoder().encode(upidUri) : new Uint8Array(0),
+        });
+    } else {
+        ours = buildTimeSignalSection(vector);
+        theirs = buildReference(vector);
+    }
+
     const ok = ours.equals(theirs);
-    const label = `event=${vector.segmentationEventId} type=0x${vector.segmentationTypeId.toString(16)} pts=${vector.ptsTime}`;
+    const label = `event=${segmentationEventId} type=0x${segmentationTypeId.toString(16)} pts=${ptsTime}`;
     if (ok) {
         console.log(`PASS  ${label}`);
     } else {

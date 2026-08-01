@@ -336,12 +336,18 @@ jobs:
           docker rm -f ci-ssai-abr
           exit "$fail"
 
-      - name: Smoke test -- CSAI (SCTE-35 injection)
+      - name: Smoke test -- CSAI (SCTE-35 injection + in-band Program Blackout Override)
         run: |
+          # Positions 9/10 (SGAI, ad-broadcast) are unused here; 11/12 fire a
+          # one-shot in-band blackout partway through the loop, same shape as
+          # --blackout-at/--blackout-length for SGAI (README.md section 7),
+          # carried as a real Program Blackout Override (0x18) SCTE-35 cue
+          # instead of an Event Timeline JSON record.
           docker run -d --name ci-csai --init \
             -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
             -p 15444:15444/udp -p 15444:15444/tcp \
-            moq-lab /media/input.mp4 ci-test.hang false 15444 false 5 true 3
+            moq-lab /media/input.mp4 ci-test.hang false 15444 false 5 true 3 \
+            false "" 2 2
 
           # ts-injector.mjs adds the CUEI registration descriptor (tag 5) to the
           # PMT as soon as it rewrites it, at container startup -- check for that
@@ -372,6 +378,28 @@ jobs:
             exit 1
           fi
           docker logs ci-csai 2>&1 | grep -q "Break Start" || { echo "no Break Start cue logged"; docker logs ci-csai; exit 1; }
+
+          # blackout-at=2/blackout-length=2 above should fire both cues well within
+          # a few loops of the 6s test clip; poll rather than assume they're already
+          # in the log by the time the checks above finished.
+          fail=0
+          for pattern in "Program Blackout Override -- ENFORCE" "Program Blackout Override -- RESTORE"; do
+            ok=false
+            for _ in $(seq 1 30); do
+              docker logs ci-csai 2>&1 | grep -qF "$pattern" && { ok=true; break; }
+              sleep 1
+            done
+            if [ "$ok" != true ]; then
+              echo "MISSING expected log line: $pattern"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            docker logs ci-csai
+            docker rm -f ci-csai
+            exit 1
+          fi
+
           docker rm -f ci-csai
 
       - name: Smoke test -- SGAI (Media Timeline, blackout, ad personalization)

@@ -21,6 +21,9 @@ CSAI="${7:-false}"
 AD_BREAK_LENGTH="${8:-6}"
 SGAI="${9:-false}"
 AD_BROADCAST="${10:-}"
+CSAI_BLACKOUT_AT="${11:-}"
+CSAI_BLACKOUT_LENGTH="${12:-10}"
+CSAI_BLACKOUT_ALT_UPID="${13:-}"
 AD="/media/ad.mp4"
 
 # Shared 5-rendition x264 ladder (240p/360p/480p/720p/1080p): reused as-is by
@@ -44,7 +47,7 @@ ABR_LADDER_ENCODE_ARGS=(
 # and from the base fmp4 stream below, so it's handled entirely on its own
 # before either of those, leaving both untouched.
 if [ "$CSAI" = true ]; then
-    echo "Starting relay on https://localhost:$PORT (broadcast=$BROADCAST, abr-ladder=$ABR_LADDER, csai=true, ad-break-every=$AD_BREAK_EVERY, ad-break-length=$AD_BREAK_LENGTH)" >&2
+    echo "Starting relay on https://localhost:$PORT (broadcast=$BROADCAST, abr-ladder=$ABR_LADDER, csai=true, ad-break-every=$AD_BREAK_EVERY, ad-break-length=$AD_BREAK_LENGTH, blackout-at=${CSAI_BLACKOUT_AT:-off})" >&2
 
     cat > /tmp/relay.toml <<EOF
 [server]
@@ -89,7 +92,8 @@ EOF
     ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
         "${CSAI_FFMPEG_ARGS[@]}" \
         -f mpegts - |
-        node /usr/local/bin/csai/ts-injector.mjs "$AD_BREAK_EVERY" "$AD_BREAK_LENGTH" |
+        node /usr/local/bin/csai/ts-injector.mjs "$AD_BREAK_EVERY" "$AD_BREAK_LENGTH" \
+            "$CSAI_BLACKOUT_AT" "$CSAI_BLACKOUT_LENGTH" "$CSAI_BLACKOUT_ALT_UPID" |
         moq --client-connect "http://localhost:${PORT}" --broadcast "$BROADCAST" import ts
 
     exit 0

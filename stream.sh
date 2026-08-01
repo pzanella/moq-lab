@@ -15,9 +15,10 @@
 #                      always assets/ad.mp4's real duration (auto-detected via ffprobe,
 #                      minus a small pipeline-latency margin) -- to test a different ad
 #                      break length, use a different ad.mp4.
-# --blackout-at N      SGAI only: fire a one-shot regional-blackout demo (Program
-#                      Blackout Override) N seconds into the run.
-# --blackout-length N  SGAI only: seconds until the blackout restores (default: 10).
+# --blackout-at N      CSAI or SGAI: fire a one-shot regional-blackout demo (Program
+#                      Blackout Override) N seconds into the run -- in-band as a binary
+#                      SCTE-35 cue for CSAI, as an Event Timeline JSON record for SGAI.
+# --blackout-length N  CSAI or SGAI: seconds until the blackout restores (default: 10).
 # --personalized-ads   SGAI only: template ad upids with a %token% placeholder --
 #                      see the --token flag on sgai/debug-subscriber.mjs.
 set -euo pipefail
@@ -77,8 +78,12 @@ if [ "$AD_BREAK_LENGTH_SET" = true ] && [ "$CSAI" != true ]; then
     warn "--ad-break-length only applies to --csai-mode; ignored here (SSAI/SGAI always use assets/ad.mp4's real duration)."
 fi
 
-if { [ -n "$BLACKOUT_AT" ] || [ "$PERSONALIZED_ADS" = true ]; } && [ "$SGAI" != true ]; then
-    warn "--blackout-at/--blackout-length/--personalized-ads only apply to --sgai-mode; ignored here."
+if [ -n "$BLACKOUT_AT" ] && [ "$CSAI" != true ] && [ "$SGAI" != true ]; then
+    warn "--blackout-at/--blackout-length only apply to --csai-mode/--sgai-mode; ignored here."
+fi
+
+if [ "$PERSONALIZED_ADS" = true ] && [ "$SGAI" != true ]; then
+    warn "--personalized-ads only applies to --sgai-mode; ignored here."
 fi
 
 # This whole project is self-contained -- MOQ_DIR is the only path this
@@ -195,8 +200,11 @@ if [ "$SGAI" = true ]; then
 
     node "$MOQ_DIR/sgai/ad-decisioning-publisher.mjs" "${AD_DECISIONING_ARGS[@]}"
 else
+    # "false" "" fill run-stream.sh's SGAI/AD_BROADCAST positions (unused here) so
+    # BLACKOUT_AT/BLACKOUT_LENGTH land in its CSAI blackout positions after them.
     docker run --name "$CONTAINER_NAME" --rm -it --init \
         "${DOCKER_VOLUMES[@]}" \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
-        "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH"
+        "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" \
+        false "" "$BLACKOUT_AT" "$BLACKOUT_LENGTH"
 fi
