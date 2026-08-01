@@ -50,7 +50,7 @@ jobs:
           pnpm install
 
       - name: SCTE-35 conformance check (csai/scte35.mjs vs @astronautlabs/scte35)
-        run: node csai/scte35.conformance.mjs
+        run: node csai/scte35.ci-check.mjs
 
       - name: Install moq-relay (prebuilt binary, same version pinned in the Dockerfile)
         run: |
@@ -208,7 +208,7 @@ jobs:
           "
           docker rm -f ci-base
 
-      - name: Smoke test -- SSAI (ad splicing + impression tracking)
+      - name: Smoke test -- SSAI (ad splicing + impression tracking, 2 passes)
         run: |
           docker run -d --name ci-ssai --init \
             -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
@@ -238,23 +238,88 @@ jobs:
             }
           "
 
-          # Ad normalization + splicing run in ffmpeg realtime filters (no fixed
-          # sleep would be reliable here, same reasoning as the CSAI/SGAI steps
-          # above), so poll container logs for the full quartile sequence
-          # instead of a single fixed wait.
-          PATTERNS=(
-            "SSAI: normalizing ad to content profile"
-            "adBreakEvery=3 adBreakLength="
-            "break=0 | start"
-            "break=0 | first_quartile"
-            "break=0 | midpoint"
-            "break=0 | third_quartile"
-            "break=0 | complete"
-          )
+          # Wait for two full run-stream.sh passes (the "while true" restart
+          # loop around impression-tracker.mjs) -- content is 6s and
+          # ad-break-every is 3s, so each pass covers 2 ad-break cycles
+          # (break=0, break=1). "SSAI: pass complete, restarting..." is only
+          # logged once a pass's ffmpeg pipe has fully closed, so its 2nd
+          # occurrence guarantees pass 2's events are already in the log too.
+          # This lets impression-tracker.ci-check.mjs below assert that the restart
+          # correctly re-zeroes the break counter instead of continuing as
+          # break=2/break=3.
+          for _ in $(seq 1 150); do
+            [ "$(docker logs ci-ssai 2>&1 | grep -c "SSAI: pass complete, restarting...")" -ge 2 ] && break
+            sleep 1
+          done
+
+          # Bare substring checks ("does this string appear anywhere in the
+          # log") wouldn't catch events firing out of order, at the wrong
+          # break index, or the break counter failing to reset across a pass
+          # restart -- impression-tracker.ci-check.mjs checks order and timing.
+          docker logs ci-ssai > /tmp/ssai-full.log 2>&1
+          if ! node ssai/impression-tracker.ci-check.mjs 3 2 < /tmp/ssai-full.log; then
+            echo "--- full container log ---"; cat /tmp/ssai-full.log
+            docker rm -f ci-ssai
+            exit 1
+          fi
+          docker rm -f ci-ssai
+
+      - name: Smoke test -- SSAI + ABR ladder (5-rendition ladder combined with ad splicing)
+        run: |
+          # No other ad mode (SSAI/CSAI/SGAI) is ever combined with the ABR
+          # ladder anywhere in this CI, even though it's a fully separate
+          # filter_complex code path in run-stream.sh (split into 5 renditions
+          # before the per-rendition scale/encode). This is the cheapest of the
+          # 2x4 combinations documented in README.md to add coverage for.
+          docker run -d --name ci-ssai-abr --init \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -v "$PWD/assets/ad.mp4:/media/ad.mp4:ro" \
+            -p 15447:15447/udp -p 15447:15447/tcp \
+            moq-lab /media/input.mp4 ci-ssai-abr.hang true 15447 true 3 false 6 false
+
+          ok=false
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:15447/announced 2>/dev/null | grep -q "ci-ssai-abr.hang"; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "SSAI+ABR broadcast never announced"; docker logs ci-ssai-abr; exit 1
+          fi
+
+          # 5x simultaneous libx264 encodes in the same realtime-paced pipeline
+          # take longer to produce a first fragment than the single-rendition
+          # SSAI test above, especially on a shared CI CPU, so this gets a
+          # longer poll budget.
+          ok=false
           for _ in $(seq 1 90); do
+            if curl -sf http://localhost:15447/fetch/ci-ssai-abr.hang/catalog.json -o /tmp/ssai-abr-catalog.json 2>/dev/null; then
+              if node -e "
+                const c = JSON.parse(require('fs').readFileSync('/tmp/ssai-abr-catalog.json'));
+                process.exit((c.video?.renditions && Object.keys(c.video.renditions).length === 5) ? 0 : 1);
+              " 2>/dev/null; then
+                ok=true; break
+              fi
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "expected 5 video renditions in the SSAI+ABR catalog, got:"; cat /tmp/ssai-abr-catalog.json 2>/dev/null
+            docker logs ci-ssai-abr
+            docker rm -f ci-ssai-abr
+            exit 1
+          fi
+
+          # Only confirms ad splicing still fires through the 5x scale/encode
+          # ladder path -- the detailed ordering/timing assertions already run
+          # against the single-rendition pipeline above, no need to duplicate
+          # them here.
+          PATTERNS=("break=0 | start" "break=0 | complete")
+          for _ in $(seq 1 120); do
             all_found=true
             for pattern in "${PATTERNS[@]}"; do
-              docker logs ci-ssai 2>&1 | grep -qF "$pattern" || all_found=false
+              docker logs ci-ssai-abr 2>&1 | grep -qF "$pattern" || all_found=false
             done
             [ "$all_found" = true ] && break
             sleep 1
@@ -262,13 +327,13 @@ jobs:
 
           fail=0
           for pattern in "${PATTERNS[@]}"; do
-            if ! docker logs ci-ssai 2>&1 | grep -qF "$pattern"; then
+            if ! docker logs ci-ssai-abr 2>&1 | grep -qF "$pattern"; then
               echo "MISSING expected log line: $pattern"
               fail=1
             fi
           done
-          [ "$fail" -ne 0 ] && docker logs ci-ssai
-          docker rm -f ci-ssai
+          [ "$fail" -ne 0 ] && docker logs ci-ssai-abr
+          docker rm -f ci-ssai-abr
           exit "$fail"
 
       - name: Smoke test -- CSAI (SCTE-35 injection)

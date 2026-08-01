@@ -61,11 +61,14 @@ CI runs two smoke tests end to end on every push/PR (see
 Timeline, blackout, and `%token%` templating a subscriber receives (no
 Docker, so no real content broadcast — the Media Timeline needs one, see
 below); `smoke-test-docker` builds the actual sandbox image and drives the
-base, CSAI, and SGAI pipelines against a synthetic clip, checking the relay's
-HTTP API (broadcast announced, catalog shape, SCTE-35 track present, real
-Media Timeline entries flowing). Neither replaces manual testing of a real
-video, real playback, or `--ssai-mode`/`--abr-ladder` — they check the pipes are wired
-correctly, not that the stream looks right. Before opening a PR:
+base, SSAI, CSAI, and SGAI pipelines (including SSAI combined with
+`--abr-ladder`) against a synthetic clip, checking the relay's HTTP API
+(broadcast announced, catalog shape, SCTE-35 track present, real Media
+Timeline entries flowing, impression-tracker quartile events in the right
+order with plausible timing across a pass restart). Neither replaces manual
+testing of a real video, real playback, or `--ssai-mode`/`--abr-ladder` —
+they check the pipes are wired correctly, not that the stream looks right.
+Before opening a PR:
 
 1. Run the mode(s) your change affects (see commands above) and confirm the
    stream plays and terminates cleanly on `Ctrl+C`.
@@ -79,7 +82,20 @@ correctly, not that the stream looks right. Before opening a PR:
    find . -path ./node_modules -prune -o -name '*.mjs' -print | xargs -n1 node --check
    ```
 
-   The two smoke-test jobs can also be run locally — see their steps in
+### `*.ci-check.mjs` scripts
+
+A few checks are too involved for an inline `run:` step in
+`ci.yml` (byte-level comparisons, ordering/timing assertions across a live
+container's logs) and live as standalone scripts instead — e.g.
+`csai/scte35.ci-check.mjs`, `ssai/impression-tracker.ci-check.mjs`. They're
+test-only: nothing in `Dockerfile` or `run-stream.sh` imports them, they
+exist purely to be invoked from a CI step. The `*.ci-check.mjs` suffix marks
+that at a glance; they live next to the module they check rather than in a
+separate `test/` directory, matching how `ssai/`, `csai/`, and `sgai/` each
+already keep their own code together. Follow the same convention for new
+CI-only verification scripts.
+
+The two smoke-test jobs can also be run locally — see their steps in
    `.github/workflows/ci.yml` for the exact commands.
 
 ## Submitting a PR
