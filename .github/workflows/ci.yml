@@ -186,15 +186,21 @@ jobs:
             -p 15444:15444/udp -p 15444:15444/tcp \
             moq-lab /media/input.mp4 ci-test.hang false 15444 false 5 true 3
 
-          # moq-cli's own MPEG-TS stream analysis needs ~30s before it exposes
-          # the SCTE-35 elementary stream in mpegts.tracks (verified empirically,
-          # independent of --ad-break-every) -- give it real margin, not a guess.
+          # ts-injector.mjs adds the CUEI registration descriptor (tag 5) to the
+          # PMT as soon as it rewrites it, at container startup -- check for that
+          # instead of moq-cli's own verbatim.streamId, which only gets populated
+          # after moq-cli's internal PES-level analysis, an unbounded amount of
+          # wall-clock time that depends on how fast the runner's CPU keeps up
+          # with ffmpeg's real-time (-re) encode (confirmed flaky in CI: the
+          # descriptor was already present while streamId still wasn't, 60s in).
           ok=false
           for _ in $(seq 1 60); do
             if curl -sf http://localhost:15444/fetch/ci-test.hang/catalog.json -o /tmp/csai-catalog.json 2>/dev/null; then
               if node -e "
                 const c = JSON.parse(require('fs').readFileSync('/tmp/csai-catalog.json'));
-                const scte = Object.values(c.mpegts?.tracks ?? {}).find((t) => t.verbatim?.streamId === 252);
+                const scte = Object.values(c.mpegts?.tracks ?? {}).find((t) =>
+                  (t.descriptors ?? []).some((d) => d.tag === 5),
+                );
                 process.exit(scte ? 0 : 1);
               " 2>/dev/null; then
                 ok=true; break
@@ -203,7 +209,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != true ]; then
-            echo "SCTE-35 track (streamId 252) never appeared in the CSAI catalog"
+            echo "SCTE-35 CUEI descriptor (tag 5) never appeared in the CSAI catalog"
             cat /tmp/csai-catalog.json 2>/dev/null
             docker logs ci-csai
             exit 1
@@ -241,7 +247,29 @@ jobs:
             > /tmp/sgai-subscriber.log 2>&1 &
           SUB_PID=$!
 
-          sleep 20
+          # Ad-break/blackout timing is wall-clock (Node setTimeout on the runner
+          # itself), so it's not at risk here -- but MEDIATIME only appears once
+          # the runner's ffmpeg has actually encoded a full GOP, which (like the
+          # CSAI SCTE-35 check) can take longer than expected on a slower/shared
+          # CI CPU. Poll for all patterns instead of a single fixed sleep, so a
+          # fast runner finishes early and a slow one still gets real margin.
+          PATTERNS=(
+            "catalog: events (eventtimeline), mediatime (mediatimeline)"
+            "MEDIATIME m="
+            "resolved upid template"
+            "RECV Program Blackout Override"
+            "would] ENFORCE blackout"
+            "would] RESTORE normal delivery"
+          )
+          for _ in $(seq 1 45); do
+            all_found=true
+            for pattern in "${PATTERNS[@]}"; do
+              grep -qF "$pattern" /tmp/sgai-subscriber.log 2>/dev/null || all_found=false
+            done
+            [ "$all_found" = true ] && break
+            sleep 1
+          done
+
           kill "$SUB_PID" "$PUB_PID" 2>/dev/null || true
           sleep 1
 
@@ -249,13 +277,7 @@ jobs:
           echo "--- sgai-subscriber.log ---"; cat /tmp/sgai-subscriber.log
 
           fail=0
-          for pattern in \
-            "catalog: events (eventtimeline), mediatime (mediatimeline)" \
-            "MEDIATIME m=" \
-            "resolved upid template" \
-            "RECV Program Blackout Override" \
-            "would] ENFORCE blackout" \
-            "would] RESTORE normal delivery"; do
+          for pattern in "${PATTERNS[@]}"; do
             if ! grep -qF "$pattern" /tmp/sgai-subscriber.log; then
               echo "MISSING expected log line: $pattern"
               fail=1
