@@ -13,13 +13,13 @@
 // A URI fragment on --url (e.g. "#token=XYZ789") is parsed exactly like a real
 // player would parse its own connection URL's fragment, and resolved against
 // any %token% placeholder found in a received record (draft-ietf-moq-msf's
-// Variable Substitution section; see sgai/msf-uri.mjs). The fragment is
+// Variable Substitution section; see lib/msf-uri.mjs). The fragment is
 // client-side only, so it rides along on --url without affecting the
 // connection itself.
 import * as Msf from "@moq/msf";
 import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced } from "./transport.mjs";
 import { SEGMENTATION_TYPE, SEGMENTATION_TYPE_NAMES } from "./event-timeline.mjs";
-import { parseFragmentVars, substitute } from "./msf-uri.mjs";
+import { parseFragmentVars, parseUri, substitute } from "../lib/msf-uri.mjs";
 import { parseArgs } from "../lib/cli.mjs";
 import { createLogger } from "../lib/log.mjs";
 
@@ -104,7 +104,12 @@ while (!stopping) {
                     const rawUpid = data.segmentation_upid_uri ?? adBroadcast;
                     const upid = substitute(rawUpid, templateVars);
                     if (upid !== rawUpid) log(`  resolved upid template '${rawUpid}' -> '${upid}' using --url's fragment`);
-                    log(`  [would] FETCH ad ('${upid}')`);
+                    try {
+                        const { namespace, track } = parseUri(upid);
+                        log(`  [would] FETCH ad ('${upid}') -- ns=${namespace ?? "<none>"} t=${track ?? "<none>"}`);
+                    } catch {
+                        log(`  [would] FETCH ad ('${upid}')`); // not a parseable moqt:// URL (e.g. a bare URN)
+                    }
                     break;
                 }
                 case SEGMENTATION_TYPE.PROVIDER_PLACEMENT_OPPORTUNITY_END:

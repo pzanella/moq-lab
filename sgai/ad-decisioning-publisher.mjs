@@ -16,7 +16,7 @@
 // It also observes the real content track to publish a Media Timeline (see
 // sgai/media-timeline.mjs) and, optionally, a one-shot regional-blackout demo
 // (Program Blackout Override) and %token%-templated ad upids (see
-// sgai/msf-uri.mjs).
+// lib/msf-uri.mjs).
 //
 // Usage:
 //   node ad-decisioning-publisher.mjs --url https://localhost:4443 \
@@ -37,6 +37,7 @@ import {
     SEGMENTATION_TYPE_NAMES,
 } from "./event-timeline.mjs";
 import { resolveVideoTiming, mediaTimelineEntry } from "./media-timeline.mjs";
+import { buildUri } from "../lib/msf-uri.mjs";
 import { parseArgs } from "../lib/cli.mjs";
 import { createLogger } from "../lib/log.mjs";
 
@@ -61,7 +62,7 @@ const adFile = args["ad-file"] ?? "/tmp/ad_normalized.mp4";
 // blackoutAt seconds into the run, restoring after blackoutLength seconds.
 const blackoutAt = args["blackout-at"] !== undefined ? Number(args["blackout-at"]) : null;
 const blackoutLength = Number(args["blackout-length"] ?? 10);
-const blackoutAltUpid = args["blackout-alt-upid"] ?? "moqt://localhost/blackout-alt-content.hang";
+const blackoutAltUpid = args["blackout-alt-upid"] ?? buildUri({ endpoint: "moqt://localhost", namespace: "blackout-alt-content.hang" });
 // Optional demo of draft-ietf-moq-msf's URI-fragment %variable% substitution:
 // appends a %token%-templated query param to the ad upid_uri, for a subscriber
 // (see debug-subscriber.mjs's --token) to resolve client-side.
@@ -95,14 +96,16 @@ function cycleAdBroadcast(cycle) {
 
 // A subscriber resolves the actual broadcast to fetch from this URI, per the
 // SCTE-35 upid_uri's real purpose: pointing at where to fetch *this* specific
-// ad. The scheme/host are informal; only the last path segment is read.
-// With --upid-token-template, a %token% placeholder rides along in the query
-// string for a subscriber to resolve (see sgai/msf-uri.mjs) -- orthogonal to
-// the per-cycle broadcast name above, which solves a different problem (safe
+// ad. `ns=` carries the per-cycle broadcast name (see buildUri() in
+// lib/msf-uri.mjs); `t=` is omitted since moq-cli only assigns the ad
+// broadcast's actual track name once it starts publishing, not something
+// known here in advance. With --upid-token-template, a %token% placeholder
+// rides along in the query string for a subscriber to resolve -- orthogonal
+// to the per-cycle broadcast name, which solves a different problem (safe
 // reuse across kill+restart, not personalization).
 function adUpidUri(cycle) {
-    const base = `moqt://localhost/${cycleAdBroadcast(cycle)}`;
-    return upidTokenTemplate ? `${base}?tok=%token%` : base;
+    const base = buildUri({ endpoint: "moqt://localhost", namespace: cycleAdBroadcast(cycle) });
+    return upidTokenTemplate ? `${base}&tok=%token%` : base;
 }
 
 const conn = await connectRelay(url);

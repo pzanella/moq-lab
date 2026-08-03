@@ -21,6 +21,7 @@
 // timestamps); the two are independent and never run together — SSAI uses
 // fmp4/moq import fmp4, CSAI uses ts/moq import ts.
 import { buildTimeSignalSection, buildProgramBlackoutOverrideSection, crc32Mpeg2, SEGMENTATION_TYPE } from "./scte35.mjs";
+import { buildUri } from "../lib/msf-uri.mjs";
 import { createLogger } from "../lib/log.mjs";
 
 const log = createLogger("CSAI");
@@ -46,7 +47,7 @@ if (!Number.isFinite(AD_BREAK_LENGTH) || AD_BREAK_LENGTH <= 0) {
 // passes this positionally, empty when --blackout-at wasn't given.
 const BLACKOUT_AT = process.argv[4] !== undefined && process.argv[4] !== "" ? Number(process.argv[4]) : null;
 const BLACKOUT_LENGTH = Number(process.argv[5] ?? 10);
-const BLACKOUT_ALT_UPID = process.argv[6] || "moqt://localhost/blackout-alt-content.hang";
+const BLACKOUT_ALT_UPID = process.argv[6] || buildUri({ endpoint: "moqt://localhost", namespace: "blackout-alt-content.hang" });
 const BLACKOUT_EVENT_ID = 5000; // matches sgai/ad-decisioning-publisher.mjs's BLACKOUT_EVENT_ID
 if (BLACKOUT_AT !== null && (!Number.isFinite(BLACKOUT_AT) || BLACKOUT_AT < 0)) {
     process.stderr.write(`[CSAI] error: invalid blackoutAt: ${process.argv[4]}\n`);

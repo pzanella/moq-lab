@@ -52,23 +52,30 @@ inside Docker (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
 - **Update README.md in the same PR.** Behavior changes (new flags, new
   broadcast names, changed defaults) must be reflected in the relevant
   section — this repo has no separate docs site, the README is the docs.
+- **Update CHANGELOG.md in the same PR.** Every dependency bump and every
+  user-visible change (new flag, new file, behavior fix) gets an entry —
+  see CHANGELOG.md's own header for what a good entry looks like.
 
 ## Testing your change
 
-CI runs two smoke tests end to end on every push/PR (see
+CI runs a set of smoke tests end to end on every push/PR (see
 `.github/workflows/ci.yml`): `smoke-test-sgai` drives
 `ad-decisioning-publisher.mjs` against a real relay and checks the Event
 Timeline, blackout, and `%token%` templating a subscriber receives (no
 Docker, so no real content broadcast — the Media Timeline needs one, see
-below); `smoke-test-docker` builds the actual sandbox image and drives the
-base, SSAI, CSAI, and SGAI pipelines (including SSAI combined with
-`--abr-ladder`) against a synthetic clip, checking the relay's HTTP API
-(broadcast announced, catalog shape, SCTE-35 track present, real Media
-Timeline entries flowing, impression-tracker quartile events in the right
-order with plausible timing across a pass restart). Neither replaces manual
-testing of a real video, real playback, or `--ssai-mode`/`--abr-ladder` —
-they check the pipes are wired correctly, not that the stream looks right.
-Before opening a PR:
+below). `smoke-test-docker-build` builds the actual sandbox image and the
+synthetic test clip once, sharing both via artifacts with one job per
+pipeline mode (`smoke-test-docker-base`, `-ssai`, `-ssai-abr`, `-csai`,
+`-sgai`) — split out so each mode gets its own pass/fail check instead of
+one job with five sequential steps, and a failure in one doesn't block the
+others from reporting. Together they check the relay's HTTP API (broadcast
+announced, catalog shape, SCTE-35 track present, real Media Timeline entries
+flowing, impression-tracker quartile events in the right order with
+plausible timing across a pass restart). If you add or rename a
+`smoke-test-docker-*` job, update any branch protection rule that names the
+old check. Neither this nor `smoke-test-sgai` replaces manual testing of a
+real video or real playback — they check the pipes are wired correctly, not
+that the stream looks right. Before opening a PR:
 
 1. Run the mode(s) your change affects (see commands above) and confirm the
    stream plays and terminates cleanly on `Ctrl+C`.
@@ -95,7 +102,7 @@ separate `test/` directory, matching how `ssai/`, `csai/`, and `sgai/` each
 already keep their own code together. Follow the same convention for new
 CI-only verification scripts.
 
-The two smoke-test jobs can also be run locally — see their steps in
+The smoke-test jobs can also be run locally — see their steps in
    `.github/workflows/ci.yml` for the exact commands.
 
 ## Submitting a PR
@@ -104,7 +111,7 @@ The two smoke-test jobs can also be run locally — see their steps in
 - Describe *what* changed and *why* — if it fixes a bug, describe the
   symptom you saw and how you confirmed the fix.
 - Note which mode(s) you tested (see above) and what you ran.
-- CI (lint + the two smoke-test jobs) must pass.
+- CI (lint + the smoke-test jobs) must pass.
 
 By contributing, you agree your contribution is licensed under this repo's
 [MIT license](LICENSE).

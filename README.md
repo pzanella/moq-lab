@@ -38,7 +38,7 @@ moq-lab/
 ├── package.json           ← host-side Node deps, used only by sgai/
 ├── pnpm-workspace.yaml    ← marks this repo as its own pnpm project
 ├── assets/                ← your local test videos (gitignored)
-├── lib/                   ← shared helpers (logger, CLI arg parsing, fMP4 box parsing)
+├── lib/                   ← shared helpers (logger, CLI arg parsing, fMP4 box parsing, MOQ URLs)
 ├── ssai/                  ← Server-Side Ad Insertion (in-container proxy)
 ├── csai/                  ← CSAI SCTE-35 signaling (in-container proxy)
 └── sgai/                  ← Server-Guided Ad Insertion (host-side publisher)
@@ -443,7 +443,7 @@ the second.
 ```
 
 ```
-[CSAI] 2026-07-15T14:03:49.011Z Program Blackout Override -- ENFORCE (event_id=0x1388, pts=1802250, alt=moqt://localhost/blackout-alt-content.hang, pid=496)
+[CSAI] 2026-07-15T14:03:49.011Z Program Blackout Override -- ENFORCE (event_id=0x1388, pts=1802250, alt=moqt://localhost?ns=blackout-alt-content.hang, pid=496)
 [CSAI] 2026-07-15T14:03:59.014Z Program Blackout Override -- RESTORE (event_id=0x1388, pts=2702475, pid=496)
 ```
 
@@ -556,11 +556,29 @@ and back to the normal feed on the second.
 ./stream.sh bbb --sgai-mode --blackout-at 45 --blackout-length 15
 ```
 
+### MOQ URL format
+
+Every `segmentation_upid_uri` this repo builds (ad upids, blackout alt-content
+upids, in both CSAI and SGAI) is a real `moqt://` URL built by
+`lib/msf-uri.mjs`'s `buildUri()`/`parseUri()`, following the `ns=`/`t=` query
+convention shown in the architecture slides (e.g.
+`moqt://example.com/relay-app/relayID?ns=customerID/broadcastID&t=video`) —
+e.g. `moqt://localhost?ns=bbb-ad-0.hang`. `ns=` carries the broadcast path;
+`t=` (track) is included only when the target track is known in advance —
+which it usually isn't for an ad broadcast, since `moq-cli` only assigns its
+actual track name once it starts publishing. This convention is shown only as
+an informal example in the slides (draft-ietf-moq-msf's own ABNF leaves the
+query's internal structure unspecified), and is adapted here to this
+sandbox's flat broadcast naming rather than the slides' hierarchical
+customerID/broadcastID pair, which this sandbox has no equivalent of.
+`sgai/debug-subscriber.mjs` parses any upid it receives back into
+`{ endpoint, namespace, track }` and logs it (`-- ns=... t=...`).
+
 ### Ad personalization (`%token%` substitution)
 
 `--personalized-ads` (SGAI only) templates each ad's `segmentation_upid_uri`
-with a `%token%` placeholder (e.g.
-`moqt://localhost/bbb-ad-0.hang?tok=%token%`), per draft-ietf-moq-msf's
+with a `%token%` placeholder in the query string (e.g.
+`moqt://localhost?ns=bbb-ad-0.hang&tok=%token%`), per draft-ietf-moq-msf's
 Variable Substitution mechanism: a subscriber resolves `%varname%`
 placeholders **client-side**, from the fragment (`#...`) of the URI it
 connected with — never from a query parameter — using whatever token its own
@@ -569,7 +587,7 @@ session carries (see the draft's own example:
 `%token%` field to `XYZ789`). `sgai/debug-subscriber.mjs` simulates that: a
 fragment on its own `--url` (e.g. `--url "http://localhost:4443#token=XYZ789"`)
 is parsed the same way and resolved against any record it receives
-(`sgai/msf-uri.mjs`). This is orthogonal to the per-break unique broadcast
+(`lib/msf-uri.mjs`). This is orthogonal to the per-break unique broadcast
 naming above, which solves a different problem (safe reuse across
 kill+restart, not personalization) — the two combine freely.
 
