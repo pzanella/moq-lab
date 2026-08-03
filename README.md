@@ -463,6 +463,18 @@ decides (client vs. server-guided), at the cost of losing CSAI's actual
 purpose here: exercising the legacy binary SCTE-35 path end to end. Noted as
 a possible future direction, not a gap in the current sandbox.
 
+### A note on SCTE 35-2
+
+Everything in this repo (CSAI's binary encoder, SGAI's `org.scte.scte35.v1`
+JSON records) implements **SCTE 35-1** ("Legacy Splice-Based and Time-Based
+Signaling", the April 2026 renumbering of the original SCTE-35). SCTE has
+since published **SCTE 35-2** ("Event-Based Signaling"), a
+`EventDescriptor`/PTP-based-`TimeDescriptor` model positioned as SCTE 35-1's
+replacement rather than a companion spec. It isn't implemented here: the spec
+sits behind SCTE's member paywall, so there's no bit-level definition to
+conform to. Noted as a known gap, not a decision — worth revisiting if the
+spec becomes accessible.
+
 ---
 
 ## 7. SGAI: Event Timeline signaling

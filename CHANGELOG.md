@@ -11,6 +11,12 @@ any breaking changes worth flagging for the next person to bump.
 
 ## Unreleased
 
+### Added
+- README: "A note on SCTE 35-2" under section 6, documenting that this repo
+  implements SCTE 35-1 only — SCTE 35-2 ("Event-Based Signaling") is its
+  declared replacement, not implemented here because the spec is behind
+  SCTE's member paywall. Tracked as a known gap (see GitHub issue).
+
 ### Changed
 - Bumped `@moq/net` 0.2.1 → 0.2.2, `moq-cli` 0.9.4 → 0.9.5, `moq-relay`
   0.14.4 → 0.14.5. No breaking changes found (full `@moq/net` `.d.ts` diff:
