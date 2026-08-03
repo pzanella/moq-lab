@@ -1,8 +1,8 @@
 FROM debian:bookworm-slim AS builder
 
 ARG TARGETARCH
-ARG MOQ_CLI_VERSION=0.9.4
-ARG MOQ_RELAY_VERSION=0.14.4
+ARG MOQ_CLI_VERSION=0.9.5
+ARG MOQ_RELAY_VERSION=0.14.5
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates && \

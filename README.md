@@ -727,8 +727,8 @@ adds the SSAI/CSAI/SGAI ad-insertion handling around it.
 Versions are pinned deliberately, not left floating — both sides move fast
 enough (weekly-ish point releases, occasional breaking changes) that an
 unpinned `cargo install`/`npm install` can silently pick up different
-behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.9.4`/`0.14.4`
-([Dockerfile](Dockerfile)), `@moq/net` `0.2.1`/`@moq/msf` `0.2.0`
+behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.9.5`/`0.14.5`
+([Dockerfile](Dockerfile)), `@moq/net` `0.2.2`/`@moq/msf` `0.2.0`
 ([package.json](package.json)). Bump the Rust and JS sides together and
 re-test rather than upgrading one at a time — see
 [CONTRIBUTING.md](CONTRIBUTING.md).

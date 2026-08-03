@@ -11,6 +11,17 @@ any breaking changes worth flagging for the next person to bump.
 
 ## Unreleased
 
+### Changed
+- Bumped `@moq/net` 0.2.1 → 0.2.2, `moq-cli` 0.9.4 → 0.9.5, `moq-relay`
+  0.14.4 → 0.14.5. No breaking changes found (full `@moq/net` `.d.ts` diff:
+  only new optional `origin`/Exclude-Hop fields for federated/clustered
+  relay topologies, which this sandbox doesn't use). Re-verified all 6
+  pipeline modes (base, SSAI, SSAI+ABR, CSAI incl. blackout, SGAI incl.
+  Media Timeline/blackout/token, lightweight signaling-only) end to end
+  against real binaries after the bump.
+
+## 2026-08-03
+
 ### Added
 - `lib/msf-uri.mjs`'s `buildUri()`/`parseUri()`: constructs and parses full
   `moqt://` URLs with the `ns=`/`t=` query convention shown in the

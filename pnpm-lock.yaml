@@ -17,8 +17,8 @@ importers:
         specifier: 0.2.0
         version: 0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)
       '@moq/net':
-        specifier: 0.2.1
-        version: 0.2.1(zod@4.4.3)
+        specifier: 0.2.2
+        version: 0.2.2(zod@4.4.3)
       ws:
         specifier: ^8.21.1
         version: 8.21.1
@@ -44,8 +44,8 @@ packages:
   '@moq/msf@0.2.0':
     resolution: {integrity: sha512-gTeWd5/NpzxbYw9Cf8OfE+ltb6e4tNUXzUc+CkXgPRpT9BvRoE+4vYivhpFNd/M9+sTgqQtU2pK91VPbzbbrIg==}
 
-  '@moq/net@0.2.1':
-    resolution: {integrity: sha512-NAZexeNYKk7LHQpTmum0qJbgRCVmnUoth4VRzIJ1gpWh2i7he/XvxgVHee+8hMS86IY/tw/O5C3oFZwn16d90g==}
+  '@moq/net@0.2.2':
+    resolution: {integrity: sha512-r89NJgf85H8q7egnY0NuVpwcszKJokbhSMxSJhOxt3bSEAFpCSESFT+hOe47lJgXl9hVSs+1ucmlKgQWUYqsGQ==}
     peerDependencies:
       zod: ^4.0.0
 
@@ -103,14 +103,14 @@ snapshots:
 
   '@moq/msf@0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)':
     dependencies:
-      '@moq/net': 0.2.1(zod@4.4.3)
+      '@moq/net': 0.2.2(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@types/react'
       - react
       - solid-js
 
-  '@moq/net@0.2.1(zod@4.4.3)':
+  '@moq/net@0.2.2(zod@4.4.3)':
     dependencies:
       '@moq/qmux': 0.3.2
       '@moq/signals': 0.2.0
