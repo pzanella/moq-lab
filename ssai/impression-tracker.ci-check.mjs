@@ -7,7 +7,7 @@
 // wouldn't catch events firing out of order, a wrong break index, or the
 // break counter failing to reset to 0 when a fresh pass starts.
 //
-// Usage: docker logs <container> | node ssai/impression-tracker.ci-check.mjs <adBreakEvery> <cyclesPerPass>
+// Usage: podman logs <container> | node ssai/impression-tracker.ci-check.mjs <adBreakEvery> <cyclesPerPass>
 import { createInterface } from "node:readline";
 
 const AD_BREAK_EVERY = Number(process.argv[2]);

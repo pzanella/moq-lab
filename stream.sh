@@ -87,7 +87,7 @@ if [ "$PERSONALIZED_ADS" = true ] && [ "$SGAI" != true ]; then
 fi
 
 # This whole project is self-contained -- MOQ_DIR is the only path this
-# script needs to find everything else (assets, Dockerfile, the host-side
+# script needs to find everything else (assets, Containerfile, the host-side
 # SGAI publisher).
 MOQ_DIR="$(cd "$(dirname "$0")" && pwd)"
 INPUT="$MOQ_DIR/assets/$NAME.mp4"
@@ -120,26 +120,59 @@ if [ "$SGAI" = true ]; then
     # comma decimal separator under it_IT), which Node's Number() then fails to parse.
     SGAI_AD_BREAK_LENGTH=$(LC_NUMERIC=C awk -v d="$SGAI_AD_REAL_LENGTH" 'BEGIN { v = d - 0.5; if (v < 1) v = 1; print v }')
     echo "Ad break length: assets/ad.mp4 is ${SGAI_AD_REAL_LENGTH}s, using ${SGAI_AD_BREAK_LENGTH}s" >&2
+
+    # --sgai-mode's Ad Decisioning Publisher is host-side Node, not something the container
+    # provides -- Node itself has to already be installed (can't be bootstrapped from a shell
+    # script the way the pnpm dependency graph below can), but pnpm install is safe to run on
+    # every invocation: it's a no-op in well under a second once node_modules already matches
+    # pnpm-lock.yaml, so this doesn't meaningfully slow down a stream that was already set up.
+    if ! command -v node >/dev/null 2>&1; then
+        echo "Node.js >=20 is required for --sgai-mode (its host-side signaling script runs outside Podman). Install it and try again." >&2
+        exit 1
+    fi
+    if ! command -v pnpm >/dev/null 2>&1; then
+        if ! command -v corepack >/dev/null 2>&1; then
+            echo "pnpm is required for --sgai-mode. It ships with Node.js >=16.9 via corepack -- install Node.js >=20 and try again." >&2
+            exit 1
+        fi
+        corepack enable
+    fi
+    echo "Installing sgai/'s host-side Node dependencies (pnpm install)..." >&2
+    (cd "$MOQ_DIR" && pnpm install)
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-    echo "Docker is required to run the MoQ streaming sandbox. Install Docker Desktop and try again." >&2
+if ! command -v podman >/dev/null 2>&1; then
+    echo "Podman is required to run the MoQ streaming sandbox. Install it from https://podman.io/docs/installation (the native installer, not Homebrew -- see the README) and try again." >&2
     exit 1
 fi
 
-if ! docker info >/dev/null 2>&1; then
-    echo "Docker daemon is not running. Start Docker Desktop and try again." >&2
+# On macOS, Podman needs a running Linux VM ("machine") before `podman info`/`build`/`run`
+# work at all. Bootstrap it here on first use rather than making that a separate manual step
+# -- `podman machine init` only creates the VM (a local, disposable resource: `podman machine
+# rm` undoes it), it doesn't install Podman itself, so this is safe to automate. Linux podman
+# is rootless-native and has no machine concept, so this only runs on Darwin; if `podman info`
+# is failing there for some other reason, the final check below still catches it.
+if ! podman info >/dev/null 2>&1 && [ "$(uname -s)" = "Darwin" ]; then
+    echo "Podman machine not ready -- setting it up (first run only, may take a minute)..." >&2
+    if ! podman machine list --format '{{.Name}}' 2>/dev/null | grep -q .; then
+        podman machine init
+    fi
+    podman machine start 2>/dev/null || true
+fi
+
+if ! podman info >/dev/null 2>&1; then
+    echo "Podman is not ready. On macOS, try 'podman machine init && podman machine start' manually; on Linux, check your Podman install." >&2
     exit 1
 fi
 
 IMAGE="moq-lab"
 CONTAINER_NAME="moq-lab-$$"
 
-cleanup() { docker rm -f "$CONTAINER_NAME" 2>/dev/null || true; }
+cleanup() { podman rm -f "$CONTAINER_NAME" 2>/dev/null || true; }
 trap cleanup EXIT
 
 echo "Building sandbox image (ffmpeg + moq)... moq/moq-relay are downloaded as prebuilt binaries, first build should only take a few seconds beyond the base image pull"
-docker build -t "$IMAGE" "$MOQ_DIR"
+podman build -t "$IMAGE" "$MOQ_DIR"
 
 if [ "$ABR_LADDER" = true ]; then
     BROADCAST="$NAME.multi.hang"
@@ -149,19 +182,19 @@ fi
 AD_BROADCAST="$NAME-ad.hang"
 EVENTS_BROADCAST="$NAME-events"
 
-DOCKER_VOLUMES=(-v "$INPUT:/media/input.mp4:ro")
+CONTAINER_VOLUMES=(-v "$INPUT:/media/input.mp4:ro")
 if [ "$SSAI" = true ] || [ "$SGAI" = true ]; then
-    DOCKER_VOLUMES+=(-v "$AD_INPUT:/media/ad.mp4:ro")
+    CONTAINER_VOLUMES+=(-v "$AD_INPUT:/media/ad.mp4:ro")
 fi
 
 if [ "$SGAI" = true ]; then
-    docker run --name "$CONTAINER_NAME" --rm -d --init \
-        "${DOCKER_VOLUMES[@]}" \
+    podman run --name "$CONTAINER_NAME" --rm -d --init \
+        "${CONTAINER_VOLUMES[@]}" \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" "$SGAI" "$AD_BROADCAST" \
         >/dev/null
     CONTAINER_LOG="/tmp/moq-lab-$$.log"
-    docker logs -f "$CONTAINER_NAME" > >(tee "$CONTAINER_LOG" >&2) 2>&1 &
+    podman logs -f "$CONTAINER_NAME" > >(tee "$CONTAINER_LOG" >&2) 2>&1 &
     LOGS_PID=$!
     trap 'kill "$LOGS_PID" 2>/dev/null || true; rm -f "$CONTAINER_LOG"; cleanup' EXIT
 
@@ -172,7 +205,7 @@ if [ "$SGAI" = true ]; then
 
     # Relay being reachable isn't a reliable proxy for "the normalized ad file is ready" -- ad
     # normalization and container startup take a variable amount of time. The Ad Decisioning
-    # Publisher launches its own fresh ad publish process (via `docker exec`) inside the
+    # Publisher launches its own fresh ad publish process (via `podman exec`) inside the
     # container at the start of each ad break, so the normalized file must exist first. Wait
     # for run-stream.sh's own marker (tee'd into $CONTAINER_LOG above) rather than guessing.
     echo "Waiting for the ad file to be ready..." >&2
@@ -202,8 +235,8 @@ if [ "$SGAI" = true ]; then
 else
     # "false" "" fill run-stream.sh's SGAI/AD_BROADCAST positions (unused here) so
     # BLACKOUT_AT/BLACKOUT_LENGTH land in its CSAI blackout positions after them.
-    docker run --name "$CONTAINER_NAME" --rm -it --init \
-        "${DOCKER_VOLUMES[@]}" \
+    podman run --name "$CONTAINER_NAME" --rm -it --init \
+        "${CONTAINER_VOLUMES[@]}" \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" \
         false "" "$BLACKOUT_AT" "$BLACKOUT_LENGTH"

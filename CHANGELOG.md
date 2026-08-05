@@ -5,7 +5,7 @@ a versioned library — entries are grouped by date, not by release number, and
 the format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 When you bump a pinned dependency (`@moq/net`/`@moq/msf` in `package.json`,
-`moq-cli`/`moq-relay` in the `Dockerfile` — see CONTRIBUTING.md), add an entry
+`moq-cli`/`moq-relay` in the `Containerfile` — see CONTRIBUTING.md), add an entry
 here in the same PR: what moved, from/to which version, and whether you found
 any breaking changes worth flagging for the next person to bump.
 
@@ -18,6 +18,26 @@ any breaking changes worth flagging for the next person to bump.
   SCTE's member paywall. Tracked as a known gap (see GitHub issue).
 
 ### Changed
+- Replaced Docker with Podman as the container runtime, everywhere: renamed
+  `Dockerfile` → `Containerfile` and `.dockerignore` → `.containerignore`,
+  switched every `docker` invocation in `stream.sh`,
+  `sgai/ad-decisioning-publisher.mjs` (the `podman exec`-based ad publish),
+  and the CI smoke tests to `podman` (same CLI surface, so no other code
+  changes needed). Renamed the CI jobs `smoke-test-docker-*` →
+  `smoke-test-podman-*`; no branch protection rule referenced the old names,
+  so nothing else to update there. Docs (README.md, CONTRIBUTING.md) updated
+  to match, including pointing at Podman's official installer instead of
+  Homebrew (Podman's own docs advise against `brew install podman` —
+  community-maintained, stability not guaranteed).
+- `stream.sh` now bootstraps its own prerequisites instead of requiring
+  manual setup: on macOS it runs `podman machine init`/`start` on first use
+  if the machine isn't ready yet (a local, disposable VM — `podman machine
+  rm` undoes it — so safe to automate, unlike installing Podman itself,
+  which stays a manual step), and it runs `pnpm install` automatically
+  whenever `--sgai-mode` is passed (a no-op in well under a second once
+  already up to date). `./stream.sh bbb --sgai-mode` is now a single command
+  end to end on a machine with Podman and Node.js already installed.
+
 - Bumped `@moq/net` 0.2.1 → 0.2.2, `moq-cli` 0.9.4 → 0.9.5, `moq-relay`
   0.14.4 → 0.14.5. No breaking changes found (full `@moq/net` `.d.ts` diff:
   only new optional `origin`/Exclude-Hop fields for federated/clustered

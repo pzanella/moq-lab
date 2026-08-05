@@ -5,7 +5,7 @@
 
 A local sandbox for spinning up MoQ (Media over QUIC) streams: single
 rendition or a full ABR ladder, with or without SSAI, CSAI, or SGAI
-ad-insertion — no tools needed beyond Docker (and Node.js, for SGAI only).
+ad-insertion — no tools needed beyond Podman (and Node.js, for SGAI only).
 
 This repo is **self-contained**: it has no dependency on anything outside it
 (own `package.json`, own `pnpm-workspace.yaml`, own `assets/`).
@@ -34,7 +34,7 @@ This repo is **self-contained**: it has no dependency on anything outside it
 moq-lab/
 ├── stream.sh              ← you run this
 ├── run-stream.sh          ← runs inside the container
-├── Dockerfile
+├── Containerfile
 ├── package.json           ← host-side Node deps, used only by sgai/
 ├── pnpm-workspace.yaml    ← marks this repo as its own pnpm project
 ├── assets/                ← your local test videos (gitignored)
@@ -44,9 +44,9 @@ moq-lab/
 └── sgai/                  ← Server-Guided Ad Insertion (host-side publisher)
 ```
 
-`ssai/` and `csai/` run **inside** the Docker image (copied in by the
-`Dockerfile`) — they're pure Node with no npm dependencies. `sgai/` runs on
-**your host**, outside Docker, and is the only part of this sandbox with
+`ssai/` and `csai/` run **inside** the Podman image (copied in by the
+`Containerfile`) — they're pure Node with no npm dependencies. `sgai/` runs on
+**your host**, outside Podman, and is the only part of this sandbox with
 external dependencies (`@moq/net`, `@moq/msf`, `ws`, `zod` — installed via
 this repo's own `package.json`).
 
@@ -54,13 +54,13 @@ this repo's own `package.json`).
 
 ## How it works
 
-- **`Dockerfile`** builds an image with `ffmpeg`, `moq` (the `moq-cli`
+- **`Containerfile`** builds an image with `ffmpeg`, `moq` (the `moq-cli`
   publisher/subscriber binary), and `moq-relay` pre-installed — as prebuilt
   Linux binaries downloaded from moq-dev/moq's GitHub releases, not compiled
   from source, so the build is fast.
 - **`run-stream.sh`** runs inside the container: it transcodes your video,
   starts the relay, and feeds the stream into `moq` as the publisher.
-- **`stream.sh`** is what you actually call. It builds the Docker image and
+- **`stream.sh`** is what you actually call. It builds the Podman image and
   starts the container for you.
 
 This sandbox has two independent dimensions, which you combine with flags:
@@ -94,14 +94,26 @@ server signals the opportunity, but doesn't splice anything. See [section
 
 ## 1. Requirements
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
-  and running (`docker info` should not print an error).
+- [Podman](https://podman.io/docs/installation) installed — use the official
+  installer, not Homebrew: Podman's own docs [advise
+  against](https://podman.io/docs/installation#macos) `brew install podman`,
+  since Homebrew is community-maintained and they can't guarantee its
+  stability. On macOS this needs a `podman machine` — `stream.sh` runs
+  `podman machine init`/`start` for you on first use if one isn't ready yet,
+  so there's nothing to set up by hand beyond installing Podman itself.
+  **Linux and macOS only** — `stream.sh`/`run-stream.sh` are bash scripts, so
+  there's no native Windows support; on Windows, run everything inside
+  [WSL2](https://learn.microsoft.com/windows/wsl/install), where Podman and
+  this repo both behave exactly as they do on Linux (untested by this repo's
+  CI, which only runs on Linux).
 - For `--sgai-mode` only: Node.js >=20 (its host-side signaling script runs
-  outside Docker) and `pnpm install` run once, from the repo root — see
-  section 7. This also applies `patches/@moq__msf.patch`, a one-line fix for
-  a missing `.js` extension in `@moq/msf`'s own ESM export map (an upstream
-  packaging bug, not something this repo's code needs) — pnpm applies it
-  automatically, no separate step required.
+  outside Podman). `stream.sh` runs `pnpm install` for you automatically when
+  you pass `--sgai-mode` (a no-op in well under a second once already up to
+  date) — this also applies `patches/@moq__msf.patch`, a one-line fix for a
+  missing `.js` extension in `@moq/msf`'s own ESM export map (an upstream
+  packaging bug, not something this repo's code needs). `pnpm` itself ships
+  with Node.js >=16.9 via `corepack`, which `stream.sh` also enables
+  automatically if needed.
 
 ---
 
@@ -189,8 +201,9 @@ act on. See [section 6](#6-csai-scte-35-signaling) for details.
 
 ### SGAI: Event Timeline signaling
 
-Requires `assets/ad.mp4` to exist, and (once) `pnpm install` run from this
-folder. See [section 7](#7-sgai-event-timeline-signaling) for details.
+Requires `assets/ad.mp4` to exist. `stream.sh` runs `pnpm install` for you
+automatically the first time you pass `--sgai-mode` — see [section
+7](#7-sgai-event-timeline-signaling) for details.
 
 ```bash
 # SGAI with default settings (a break every 30s; ad break length is
@@ -491,17 +504,18 @@ decoded JSON.
 
 This is the only mode with npm dependencies — declared in this repo's own
 `package.json` (see "Project layout" above), even though only `sgai/*.mjs`
-imports any of it today. Run `pnpm install` once before first use.
+imports any of it today. `stream.sh` runs `pnpm install` automatically the
+first time you pass `--sgai-mode`; nothing to do by hand.
 
 ### What runs where
 
-- **Inside Docker** (`run-stream.sh`, same container as always): content is
+- **Inside Podman** (`run-stream.sh`, same container as always): content is
   published continuously to `<name>.hang` / `<name>.multi.hang`, exactly like
   the base pipeline. The ad is *not* published continuously — only the ad
   file is normalized to the content's profile and left on disk
   (`/tmp/ad_normalized.mp4`) for the Ad Decisioning Publisher below to
   trigger on demand.
-- **On your host** (not in Docker): `sgai/ad-decisioning-publisher.mjs`
+- **On your host** (not in Podman): `sgai/ad-decisioning-publisher.mjs`
   connects to the relay as a third, independent MoQ publisher and emits
   `org.scte.scte35.v1`-shaped Event Timeline JSON records (built by
   `sgai/event-timeline.mjs`) on a broadcast named `<name>-events`, on a
@@ -513,7 +527,7 @@ imports any of it today. Run `pnpm install` once before first use.
   catalog with two tracks: `events` (`packaging: "eventtimeline"`) and
   `mediatime` (`packaging: "mediatimeline"`, see below) — not hand-rolled
   JSON. `events` declares `depends: ["mediatime"]`, a real co-published track.
-  At the start of every ad break, this same script also `docker exec`s a
+  At the start of every ad break, this same script also `podman exec`s a
   fresh, single-shot `ffmpeg | moq import fmp4` of the normalized ad into the
   sandbox container, from the ad's own frame 0 — there is no
   continuously-looping ad stream to land mid-file on. Each ad break publishes
@@ -677,9 +691,12 @@ know when the relay is ready before publishing starts.
 
 ## 9. Troubleshooting
 
-**"Docker daemon is not running"**
-Open Docker Desktop and wait for it to finish starting, then try again. You
-can check it is ready with `docker info`.
+**"Podman is not ready"**
+`stream.sh` tries to set up the `podman machine` for you on macOS on first
+use — if it still can't get ready (e.g. the machine failed to start), run
+`podman machine init && podman machine start` by hand and check the output.
+On Linux, make sure the `podman` package itself is installed. You can check
+readiness at any time with `podman info`.
 
 **"Missing assets/\<name\>.mp4"**
 The content file is not where the script expects it. Check that the file is
@@ -698,12 +715,14 @@ warning, then reload the player page.
 
 **The stream freezes at the ad→content transition (SSAI)**
 This can happen if the ad file has a very different frame rate or resolution
-and the normalization step did not run successfully. Check the Docker logs for
+and the normalization step did not run successfully. Check the Podman logs for
 `SSAI: normalizing ad...` and for any ffmpeg error messages.
 
 **`--sgai-mode` fails with a module-not-found error**
-Run `pnpm install` once — `sgai/*.mjs` depends on `@moq/net`, `@moq/msf`,
-`ws`, and `zod`, declared in this repo's own `package.json`.
+`stream.sh` runs `pnpm install` for you automatically, but if you're invoking
+a script under `sgai/` directly (bypassing `stream.sh`), run `pnpm install`
+yourself first — `sgai/*.mjs` depends on `@moq/net`, `@moq/msf`, `ws`, and
+`zod`, declared in this repo's own `package.json`.
 
 **Port already in use**
 Another process is using port 4443. Pass a different port with `--port N`,
@@ -713,8 +732,8 @@ and update the player's `moq.url` to match.
 `moq` and `moq-relay` are downloaded as prebuilt binaries, not compiled, so
 this should only take a few seconds beyond the base image pull. If a build is
 taking minutes, check your network connection to GitHub releases rather than
-assuming a source compile is happening. Subsequent builds use the Docker
-layer cache and are faster still. To force a fresh build: `docker rmi moq-lab`.
+assuming a source compile is happening. Subsequent builds use Podman's
+layer cache and are faster still. To force a fresh build: `podman rmi moq-lab`.
 
 ---
 
@@ -731,16 +750,16 @@ conventions, and what to include in a PR.
 This sandbox is built entirely on top of
 [moq-dev/moq](https://github.com/moq-dev/moq) — the MoQ (Media over QUIC)
 relay and publisher/subscriber CLI (`moq-relay`, `moq-cli`, downloaded as
-prebuilt binaries in the [Dockerfile](Dockerfile)) and the JS libraries (`@moq/net`,
+prebuilt binaries in the [Containerfile](Containerfile)) and the JS libraries (`@moq/net`,
 `@moq/msf`) `sgai/` depends on. moq-lab doesn't reimplement any of the
-protocol itself; it wraps that project in a repeatable Docker sandbox and
+protocol itself; it wraps that project in a repeatable Podman sandbox and
 adds the SSAI/CSAI/SGAI ad-insertion handling around it.
 
 Versions are pinned deliberately, not left floating — both sides move fast
 enough (weekly-ish point releases, occasional breaking changes) that an
 unpinned `cargo install`/`npm install` can silently pick up different
 behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.9.5`/`0.14.5`
-([Dockerfile](Dockerfile)), `@moq/net` `0.2.2`/`@moq/msf` `0.2.0`
+([Containerfile](Containerfile)), `@moq/net` `0.2.2`/`@moq/msf` `0.2.0`
 ([package.json](package.json)). Bump the Rust and JS sides together and
 re-test rather than upgrading one at a time — see
 [CONTRIBUTING.md](CONTRIBUTING.md).

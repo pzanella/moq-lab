@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Yellow only when stderr is an actual terminal -- keeps piped/redirected output
-# (docker logs, CI) free of escape codes.
+# (podman logs, CI) free of escape codes.
 warn() {
     if [ -t 2 ]; then
         printf '\033[33mWarning: %s\033[0m\n' "$1" >&2
@@ -171,7 +171,7 @@ if { [ "$SSAI" = true ] || [ "$SGAI" = true ]; } && [ -n "$PREP_PID" ]; then
     fi
     PREP_PID=""
     # Marker for the host-side script: the Ad Decisioning Publisher launches a fresh ad
-    # publish (via `docker exec`) at the start of each ad break, referencing this file, so it
+    # publish (via `podman exec`) at the start of each ad break, referencing this file, so it
     # must exist first.
     [ "$SGAI" = true ] && echo "SGAI: ad file ready" >&2
 fi
@@ -295,7 +295,7 @@ elif [ "$SGAI" = true ]; then
     # SGAI mode: content and ad are two fully independent MoQ broadcasts (no
     # splicing). Ad-break signaling, and the ad publish itself, are driven
     # out-of-process by sgai/ad-decisioning-publisher.mjs on the
-    # host: it `docker exec`s a fresh, single-shot publish of $NORM_AD into this
+    # host: it `podman exec`s a fresh, single-shot publish of $NORM_AD into this
     # container at the start of each ad break, so the ad always starts at its own
     # frame 0 instead of wherever a continuously-looping stream happened to be.
     echo "SGAI: publishing content ('$BROADCAST') only; ad ('$AD_BROADCAST') is published on-demand per ad break." >&2

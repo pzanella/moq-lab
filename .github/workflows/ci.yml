@@ -30,11 +30,11 @@ jobs:
             | xargs -n1 node --check
 
   # Runs the real SGAI signaling pipeline (ad-decisioning-publisher.mjs +
-  # debug-subscriber.mjs) against a live relay, no Docker needed -- this is what
+  # debug-subscriber.mjs) against a live relay, no Podman needed -- this is what
   # would have caught ad-decisioning-publisher.mjs being accidentally deleted.
   # Covers ad-break signaling, blackout, and token templating; the Media
   # Timeline needs a real content broadcast, so that's checked in
-  # smoke-test-docker instead.
+  # smoke-test-podman instead.
   smoke-test-sgai:
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +52,7 @@ jobs:
       - name: SCTE-35 conformance check (csai/scte35.mjs vs @astronautlabs/scte35)
         run: node csai/scte35.ci-check.mjs
 
-      - name: Install moq-relay (prebuilt binary, same version pinned in the Dockerfile)
+      - name: Install moq-relay (prebuilt binary, same version pinned in the Containerfile)
         run: |
           curl -fsSL "https://github.com/moq-dev/moq/releases/download/moq-relay-v${MOQ_RELAY_VERSION}/moq-relay-${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
             | tar xz -C /usr/local/bin --strip-components=2 "moq-relay-${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu/bin/moq-relay"
@@ -80,7 +80,7 @@ jobs:
 
       - name: Run the Ad Decisioning Publisher against a debug subscriber and check the Event Timeline
         run: |
-          # No real content broadcast in this job (see smoke-test-docker for that) --
+          # No real content broadcast in this job (see smoke-test-podman for that) --
           # blackout and token templating don't need one, only the Media Timeline
           # does, so those are exercised here and Media Timeline is checked there.
           nohup node sgai/ad-decisioning-publisher.mjs \
@@ -93,7 +93,7 @@ jobs:
           PUB_PID=$!
 
           # Give the publisher a moment to announce its broadcasts before the
-          # subscriber connects, same as smoke-test-docker's SGAI step -- without
+          # subscriber connects, same as smoke-test-podman's SGAI step -- without
           # this the subscriber can attach after the earliest events already fired
           # and permanently miss them (this is a live stream, not a replay).
           sleep 1
@@ -108,7 +108,7 @@ jobs:
           # `timeout 12` + one-shot check -- that combination was flaky under
           # CI load (a slow tick could blow the 12s budget with no way to
           # recover), same class of bug the CSAI SCTE-35 check and the SGAI
-          # docker step below already had to fix. A fast runner still exits
+          # podman step below already had to fix. A fast runner still exits
           # early; a slow one gets real margin instead of a hard cutoff.
           PATTERNS=(
             "catalog: events (eventtimeline), mediatime (mediatimeline)"
@@ -154,16 +154,16 @@ jobs:
   # section 8). SGAI here also covers the Media Timeline, which needs a
   # real content broadcast to observe.
   #
-  # Split into one job per pipeline mode (instead of one "smoke-test-docker"
+  # Split into one job per pipeline mode (instead of one "smoke-test-podman"
   # job with five sequential steps) so each mode shows up as its own check
   # in the PR / Actions UI, and a failure in one doesn't block the others
   # from reporting. The image and synthetic clip are built once in
-  # smoke-test-docker-build and shared via artifacts -- rebuilding the same
+  # smoke-test-podman-build and shared via artifacts -- rebuilding the same
   # image five times duplicated both the YAML and the actual work (apt-get,
-  # ffmpeg encode, docker build). Update any branch protection rule that
-  # referenced the old "smoke-test-docker" check name to require the jobs
+  # ffmpeg encode, podman build). Update any branch protection rule that
+  # referenced the old "smoke-test-podman" check name to require the jobs
   # below instead.
-  smoke-test-docker-build:
+  smoke-test-podman-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -180,10 +180,10 @@ jobs:
           cp assets/ci-test.mp4 assets/ad.mp4
 
       - name: Build the sandbox image
-        run: docker build -t moq-lab .
+        run: podman build -t moq-lab .
 
       - name: Save the image for downstream jobs
-        run: docker save moq-lab | gzip > /tmp/moq-lab-image.tar.gz
+        run: podman save moq-lab | gzip > /tmp/moq-lab-image.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
@@ -197,8 +197,8 @@ jobs:
           path: assets/
           retention-days: 1
 
-  smoke-test-docker-base:
-    needs: smoke-test-docker-build
+  smoke-test-podman-base:
+    needs: smoke-test-podman-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@v4
@@ -216,11 +216,11 @@ jobs:
           path: assets
 
       - name: Load the sandbox image
-        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
 
       - name: Smoke test -- base pipeline (no ads)
         run: |
-          docker run -d --name ci-base --init \
+          podman run -d --name ci-base --init \
             -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
             -p 15443:15443/udp -p 15443:15443/tcp \
             moq-lab /media/input.mp4 ci-test.hang false 15443 false 30 false 6
@@ -233,7 +233,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != true ]; then
-            echo "base broadcast never announced"; docker logs ci-base; exit 1
+            echo "base broadcast never announced"; podman logs ci-base; exit 1
           fi
 
           curl -sf http://localhost:15443/fetch/ci-test.hang/catalog.json -o /tmp/base-catalog.json
@@ -243,10 +243,10 @@ jobs:
               throw new Error('no video rendition in catalog: ' + JSON.stringify(c));
             }
           "
-          docker rm -f ci-base
+          podman rm -f ci-base
 
-  smoke-test-docker-ssai:
-    needs: smoke-test-docker-build
+  smoke-test-podman-ssai:
+    needs: smoke-test-podman-build
     runs-on: ubuntu-latest
     steps:
       # ssai/impression-tracker.ci-check.mjs below is a repo script, unlike
@@ -268,11 +268,11 @@ jobs:
           path: assets
 
       - name: Load the sandbox image
-        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
 
       - name: Smoke test -- SSAI (ad splicing + impression tracking, 2 passes)
         run: |
-          docker run -d --name ci-ssai --init \
+          podman run -d --name ci-ssai --init \
             -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
             -v "$PWD/assets/ad.mp4:/media/ad.mp4:ro" \
             -p 15446:15446/udp -p 15446:15446/tcp \
@@ -286,7 +286,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != true ]; then
-            echo "SSAI broadcast never announced"; docker logs ci-ssai; exit 1
+            echo "SSAI broadcast never announced"; podman logs ci-ssai; exit 1
           fi
 
           # Confirms impression-tracker.mjs's passthrough left the fmp4 stream
@@ -310,7 +310,7 @@ jobs:
           # correctly re-zeroes the break counter instead of continuing as
           # break=2/break=3.
           for _ in $(seq 1 150); do
-            [ "$(docker logs ci-ssai 2>&1 | grep -c "SSAI: pass complete, restarting...")" -ge 2 ] && break
+            [ "$(podman logs ci-ssai 2>&1 | grep -c "SSAI: pass complete, restarting...")" -ge 2 ] && break
             sleep 1
           done
 
@@ -318,16 +318,16 @@ jobs:
           # log") wouldn't catch events firing out of order, at the wrong
           # break index, or the break counter failing to reset across a pass
           # restart -- impression-tracker.ci-check.mjs checks order and timing.
-          docker logs ci-ssai > /tmp/ssai-full.log 2>&1
+          podman logs ci-ssai > /tmp/ssai-full.log 2>&1
           if ! node ssai/impression-tracker.ci-check.mjs 3 2 < /tmp/ssai-full.log; then
             echo "--- full container log ---"; cat /tmp/ssai-full.log
-            docker rm -f ci-ssai
+            podman rm -f ci-ssai
             exit 1
           fi
-          docker rm -f ci-ssai
+          podman rm -f ci-ssai
 
-  smoke-test-docker-ssai-abr:
-    needs: smoke-test-docker-build
+  smoke-test-podman-ssai-abr:
+    needs: smoke-test-podman-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@v4
@@ -345,7 +345,7 @@ jobs:
           path: assets
 
       - name: Load the sandbox image
-        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
 
       - name: Smoke test -- SSAI + ABR ladder (5-rendition ladder combined with ad splicing)
         run: |
@@ -354,7 +354,7 @@ jobs:
           # filter_complex code path in run-stream.sh (split into 5 renditions
           # before the per-rendition scale/encode). This is the cheapest of the
           # 2x4 combinations documented in README.md to add coverage for.
-          docker run -d --name ci-ssai-abr --init \
+          podman run -d --name ci-ssai-abr --init \
             -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
             -v "$PWD/assets/ad.mp4:/media/ad.mp4:ro" \
             -p 15447:15447/udp -p 15447:15447/tcp \
@@ -368,7 +368,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != true ]; then
-            echo "SSAI+ABR broadcast never announced"; docker logs ci-ssai-abr; exit 1
+            echo "SSAI+ABR broadcast never announced"; podman logs ci-ssai-abr; exit 1
           fi
 
           # 5x simultaneous libx264 encodes in the same realtime-paced pipeline
@@ -389,8 +389,8 @@ jobs:
           done
           if [ "$ok" != true ]; then
             echo "expected 5 video renditions in the SSAI+ABR catalog, got:"; cat /tmp/ssai-abr-catalog.json 2>/dev/null
-            docker logs ci-ssai-abr
-            docker rm -f ci-ssai-abr
+            podman logs ci-ssai-abr
+            podman rm -f ci-ssai-abr
             exit 1
           fi
 
@@ -402,7 +402,7 @@ jobs:
           for _ in $(seq 1 120); do
             all_found=true
             for pattern in "${PATTERNS[@]}"; do
-              docker logs ci-ssai-abr 2>&1 | grep -qF "$pattern" || all_found=false
+              podman logs ci-ssai-abr 2>&1 | grep -qF "$pattern" || all_found=false
             done
             [ "$all_found" = true ] && break
             sleep 1
@@ -410,17 +410,17 @@ jobs:
 
           fail=0
           for pattern in "${PATTERNS[@]}"; do
-            if ! docker logs ci-ssai-abr 2>&1 | grep -qF "$pattern"; then
+            if ! podman logs ci-ssai-abr 2>&1 | grep -qF "$pattern"; then
               echo "MISSING expected log line: $pattern"
               fail=1
             fi
           done
-          [ "$fail" -ne 0 ] && docker logs ci-ssai-abr
-          docker rm -f ci-ssai-abr
+          [ "$fail" -ne 0 ] && podman logs ci-ssai-abr
+          podman rm -f ci-ssai-abr
           exit "$fail"
 
-  smoke-test-docker-csai:
-    needs: smoke-test-docker-build
+  smoke-test-podman-csai:
+    needs: smoke-test-podman-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@v4
@@ -438,7 +438,7 @@ jobs:
           path: assets
 
       - name: Load the sandbox image
-        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
 
       - name: Smoke test -- CSAI (SCTE-35 injection + in-band Program Blackout Override)
         run: |
@@ -447,7 +447,7 @@ jobs:
           # --blackout-at/--blackout-length for SGAI (README.md section 7),
           # carried as a real Program Blackout Override (0x18) SCTE-35 cue
           # instead of an Event Timeline JSON record.
-          docker run -d --name ci-csai --init \
+          podman run -d --name ci-csai --init \
             -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
             -p 15444:15444/udp -p 15444:15444/tcp \
             moq-lab /media/input.mp4 ci-test.hang false 15444 false 5 true 3 \
@@ -478,10 +478,10 @@ jobs:
           if [ "$ok" != true ]; then
             echo "SCTE-35 CUEI descriptor (tag 5) never appeared in the CSAI catalog"
             cat /tmp/csai-catalog.json 2>/dev/null
-            docker logs ci-csai
+            podman logs ci-csai
             exit 1
           fi
-          docker logs ci-csai 2>&1 | grep -q "Break Start" || { echo "no Break Start cue logged"; docker logs ci-csai; exit 1; }
+          podman logs ci-csai 2>&1 | grep -q "Break Start" || { echo "no Break Start cue logged"; podman logs ci-csai; exit 1; }
 
           # blackout-at=2/blackout-length=2 above should fire both cues well within
           # a few loops of the 6s test clip; poll rather than assume they're already
@@ -490,7 +490,7 @@ jobs:
           for pattern in "Program Blackout Override -- ENFORCE" "Program Blackout Override -- RESTORE"; do
             ok=false
             for _ in $(seq 1 30); do
-              docker logs ci-csai 2>&1 | grep -qF "$pattern" && { ok=true; break; }
+              podman logs ci-csai 2>&1 | grep -qF "$pattern" && { ok=true; break; }
               sleep 1
             done
             if [ "$ok" != true ]; then
@@ -499,15 +499,15 @@ jobs:
             fi
           done
           if [ "$fail" -ne 0 ]; then
-            docker logs ci-csai
-            docker rm -f ci-csai
+            podman logs ci-csai
+            podman rm -f ci-csai
             exit 1
           fi
 
-          docker rm -f ci-csai
+          podman rm -f ci-csai
 
-  smoke-test-docker-sgai:
-    needs: smoke-test-docker-build
+  smoke-test-podman-sgai:
+    needs: smoke-test-podman-build
     runs-on: ubuntu-latest
     steps:
       # sgai/ad-decisioning-publisher.mjs and sgai/debug-subscriber.mjs below
@@ -535,21 +535,21 @@ jobs:
           path: assets
 
       - name: Load the sandbox image
-        run: gunzip -c /tmp/moq-lab-image.tar.gz | docker load
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
 
       - name: Smoke test -- SGAI (Media Timeline, blackout, ad personalization)
         run: |
-          docker run -d --name ci-sgai --init \
+          podman run -d --name ci-sgai --init \
             -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
             -v "$PWD/assets/ad.mp4:/media/ad.mp4:ro" \
             -p 15445:15445/udp -p 15445:15445/tcp \
             moq-lab /media/input.mp4 ci-sgai.hang false 15445 false 6 false 6 true ci-sgai-ad.hang
 
           for _ in $(seq 1 30); do
-            docker logs ci-sgai 2>&1 | grep -q "SGAI: ad file ready" && break
+            podman logs ci-sgai 2>&1 | grep -q "SGAI: ad file ready" && break
             sleep 1
           done
-          docker logs ci-sgai 2>&1 | grep -q "SGAI: ad file ready" || { echo "container never became ready"; docker logs ci-sgai; exit 1; }
+          podman logs ci-sgai 2>&1 | grep -q "SGAI: ad file ready" || { echo "container never became ready"; podman logs ci-sgai; exit 1; }
 
           nohup node sgai/ad-decisioning-publisher.mjs \
             --url http://localhost:15445 \
@@ -603,5 +603,5 @@ jobs:
               fail=1
             fi
           done
-          docker rm -f ci-sgai
+          podman rm -f ci-sgai
           exit "$fail"

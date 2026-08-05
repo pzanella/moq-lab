@@ -6,13 +6,23 @@ README in sync with what the code actually does.
 
 ## Getting set up
 
-- Docker Desktop running (`docker info` should not error).
-- Node.js >=20 and `pnpm` — only needed if you're touching `sgai/` or `lib/`.
-  Run `pnpm install` once from the repo root (this also applies
-  `patches/@moq__msf.patch`, an upstream packaging fix — nothing to do
-  manually).
+- Podman installed via the [official
+  installer](https://podman.io/docs/installation), not Homebrew (Podman's own
+  docs advise against `brew install podman` — community-maintained, stability
+  not guaranteed). `stream.sh` sets up the `podman machine` for you on macOS
+  on first use, so there's nothing else to do by hand.
+- **Linux or macOS.** `stream.sh`/`run-stream.sh` are bash, with no native
+  Windows support; on Windows, work inside WSL2, where this repo behaves the
+  same as on Linux. CI only runs on Linux (`ubuntu-latest`).
+- Node.js >=20 — only needed if you're touching `sgai/` or `lib/`, or running
+  `--sgai-mode`. `pnpm` itself ships via `corepack` (bundled with Node.js
+  >=16.9); `stream.sh` runs `pnpm install` for you automatically the first
+  time you pass `--sgai-mode` (this also applies `patches/@moq__msf.patch`,
+  an upstream packaging fix — nothing to do manually). If you're editing
+  `sgai/`/`lib/` without running `stream.sh` (e.g. for your editor's
+  IntelliSense), run `pnpm install` yourself once.
 - No other host dependencies. `ffmpeg`, `moq`, and `moq-relay` all live inside
-  the Docker image built by `stream.sh`.
+  the Podman image built by `stream.sh`.
 
 Try the sandbox before changing it, so you have a baseline to compare against:
 
@@ -21,13 +31,13 @@ Try the sandbox before changing it, so you have a baseline to compare against:
 ./stream.sh bbb --abr-ladder       # ABR ladder
 ./stream.sh bbb --ssai-mode        # requires assets/ad.mp4
 ./stream.sh bbb --csai-mode
-./stream.sh bbb --sgai-mode        # requires assets/ad.mp4 + pnpm install
+./stream.sh bbb --sgai-mode        # requires assets/ad.mp4; pnpm install runs automatically
 ```
 
 ## Project layout
 
 See [README.md](README.md#project-layout) for the full breakdown of what runs
-inside Docker (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
+inside Podman (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
 (`stream.sh`, `sgai/`).
 
 ## Making changes
@@ -44,7 +54,7 @@ inside Docker (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
 - **No new dependencies without a reason.** `sgai/`'s `package.json` is
   intentionally minimal (`@moq/net`, `@moq/msf`, `ws`, `zod`). If a change
   needs a new package, explain why in the PR description.
-- **Bump pinned versions together.** `moq-cli`/`moq-relay` (`Dockerfile`) and
+- **Bump pinned versions together.** `moq-cli`/`moq-relay` (`Containerfile`) and
   `@moq/net`/`@moq/msf` (`package.json`) are pinned on purpose. They move
   fast and have shipped breaking changes between minor versions before —
   bump both sides deliberately and re-run the smoke tests, not just
@@ -62,17 +72,17 @@ CI runs a set of smoke tests end to end on every push/PR (see
 `.github/workflows/ci.yml`): `smoke-test-sgai` drives
 `ad-decisioning-publisher.mjs` against a real relay and checks the Event
 Timeline, blackout, and `%token%` templating a subscriber receives (no
-Docker, so no real content broadcast — the Media Timeline needs one, see
-below). `smoke-test-docker-build` builds the actual sandbox image and the
+Podman, so no real content broadcast — the Media Timeline needs one, see
+below). `smoke-test-podman-build` builds the actual sandbox image and the
 synthetic test clip once, sharing both via artifacts with one job per
-pipeline mode (`smoke-test-docker-base`, `-ssai`, `-ssai-abr`, `-csai`,
+pipeline mode (`smoke-test-podman-base`, `-ssai`, `-ssai-abr`, `-csai`,
 `-sgai`) — split out so each mode gets its own pass/fail check instead of
 one job with five sequential steps, and a failure in one doesn't block the
 others from reporting. Together they check the relay's HTTP API (broadcast
 announced, catalog shape, SCTE-35 track present, real Media Timeline entries
 flowing, impression-tracker quartile events in the right order with
 plausible timing across a pass restart). If you add or rename a
-`smoke-test-docker-*` job, update any branch protection rule that names the
+`smoke-test-podman-*` job, update any branch protection rule that names the
 old check. Neither this nor `smoke-test-sgai` replaces manual testing of a
 real video or real playback — they check the pipes are wired correctly, not
 that the stream looks right. Before opening a PR:
@@ -95,7 +105,7 @@ A few checks are too involved for an inline `run:` step in
 `ci.yml` (byte-level comparisons, ordering/timing assertions across a live
 container's logs) and live as standalone scripts instead — e.g.
 `csai/scte35.ci-check.mjs`, `ssai/impression-tracker.ci-check.mjs`. They're
-test-only: nothing in `Dockerfile` or `run-stream.sh` imports them, they
+test-only: nothing in `Containerfile` or `run-stream.sh` imports them, they
 exist purely to be invoked from a CI step. The `*.ci-check.mjs` suffix marks
 that at a glance; they live next to the module they check rather than in a
 separate `test/` directory, matching how `ssai/`, `csai/`, and `sgai/` each

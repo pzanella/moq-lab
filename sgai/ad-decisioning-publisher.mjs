@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The "MOQ Ad Decisioning Publisher" from the SGAI-over-MOQ architecture.
 //
-// Runs on the host (not inside the Docker sandbox). Connects to the relay
+// Runs on the host (not inside the Podman sandbox). Connects to the relay
 // started by stream.sh --sgai-mode and publishes a third, independent
 // broadcast carrying an org.scte.scte35.v1 Event Timeline: SCTE-35-shaped
 // JSON records signaling when to switch between the content and ad
@@ -9,7 +9,7 @@
 // not derived from parsing media timestamps.
 //
 // It also owns the ad broadcast's lifecycle: at the start of every ad break it
-// `docker exec`s a fresh, single-shot `ffmpeg | moq import` into the sandbox
+// `podman exec`s a fresh, single-shot `ffmpeg | moq import` into the sandbox
 // container, so the ad always starts at its own frame 0 instead of wherever a
 // continuously-looping stream happened to be when the break began.
 //
@@ -269,7 +269,7 @@ function publishAdOnce(broadcastName) {
     const cmd = `ffmpeg -hide_banner -v quiet -re -i "${adFile}" -c copy ` +
         `-f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - | ` +
         `moq --client-connect "http://localhost:${relayPort}" --broadcast "${broadcastName}" import fmp4`;
-    const proc = spawn("docker", ["exec", "-d", containerName, "sh", "-c", cmd], { stdio: "ignore" });
+    const proc = spawn("podman", ["exec", "-d", containerName, "sh", "-c", cmd], { stdio: "ignore" });
     proc.on("error", (err) => log(`failed to launch ad publish: ${err.message}`));
 }
 
@@ -280,7 +280,7 @@ function publishAdOnce(broadcastName) {
 // and the relay's connection slot), not a correctness requirement -- no need to wait for it.
 function stopAd(broadcastName) {
     const cmd = `pkill -f 'broadcast ${broadcastName} import fmp4' || true`;
-    const proc = spawn("docker", ["exec", "-d", containerName, "sh", "-c", cmd], { stdio: "ignore" });
+    const proc = spawn("podman", ["exec", "-d", containerName, "sh", "-c", cmd], { stdio: "ignore" });
     proc.on("error", (err) => log(`failed to stop ad publish: ${err.message}`));
 }
 
