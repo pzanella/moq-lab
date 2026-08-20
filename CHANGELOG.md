@@ -57,6 +57,17 @@ any breaking changes worth flagging for the next person to bump.
   command, no descriptors, nothing for a receiver to act on); `ts-injector.mjs`
   now sends one immediately at stream start and every 2s afterward,
   independent of the ad-break schedule.
+- SGAI: `Ad Start` (which carries the per-break ad broadcast's name in
+  `segmentation_upid_uri`) could be emitted before that broadcast was
+  actually announced on the relay — `publishAdOnce()` only launches
+  (detached) the `podman exec`'d `ffmpeg | moq import`, which still has to
+  fork, connect, and get its ANNOUNCE processed. A subscriber that reacts to
+  `Ad Start` by immediately `FETCH`ing reliably lost that race on a cold
+  container (first ad break of a run, before the shell/ffmpeg/moq binaries
+  are warm). `sgai/ad-decisioning-publisher.mjs` now waits for the relay's
+  own ANNOUNCE via `waitForAnnounced()` before emitting `Ad Start`, capped at
+  `min(8s, --ad-break-length)` so a container/ffmpeg/moq failure can't freeze
+  every subsequent ad break behind one stuck wait.
 
 ## 2026-08-03
 

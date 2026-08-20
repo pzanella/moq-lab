@@ -320,6 +320,29 @@ while (running) {
     await sleepUntil(breakStartMs);
     if (!running) break;
     publishAdOnce(cycleAdBroadcastName);
+    // adStart's segmentation_upid_uri points a subscriber at cycleAdBroadcastName, so emitting it
+    // before that broadcast is actually announced on the relay is a real race, not just a
+    // theoretical one: publishAdOnce() above only *launches* (detached, fire-and-forget) the
+    // podman exec that runs ffmpeg | moq import -- moq still has to fork inside the container,
+    // open its own connection to the relay, and get its ANNOUNCE processed before the broadcast
+    // exists on the wire. A subscriber that reacts to adStart by immediately FETCHing gets nothing
+    // if it wins that race, which it reliably does on a cold container (first ad break of a run,
+    // before the shell/ffmpeg/moq binaries are warm in the page cache) -- later breaks are usually
+    // fast enough to not notice, which is why this only shows up on the very first break. Waiting
+    // for the relay's own ANNOUNCE (the same primitive the Media Timeline observer above uses for
+    // the content broadcast) makes the guarantee real instead of incidental.
+    // Capped rather than an unbounded wait: if the podman exec above never results in an
+    // ANNOUNCE (e.g. the container/ffmpeg/moq chain failed outright), waitForAnnounced's
+    // announced.next() loop would otherwise never resolve, freezing every subsequent ad
+    // break behind this one. The cap is generous relative to podman-exec-cold-start latency
+    // but still bounded by the break's own length, so a stuck wait can't outlast its break.
+    const ANNOUNCE_WAIT_CAP_MS = Math.min(8000, adBreakLength * 1000);
+    const adAnnounced = await Promise.race([
+        waitForAnnounced(conn, Moq.Path.from(cycleAdBroadcastName)),
+        new Promise((resolve) => setTimeout(() => resolve(false), ANNOUNCE_WAIT_CAP_MS)),
+    ]);
+    if (!running) break;
+    if (!adAnnounced) log(`WARNING: '${cycleAdBroadcastName}' was not announced within ${ANNOUNCE_WAIT_CAP_MS}ms; emitting adStart anyway`);
     // adStart must be written (and observed) before placementOpportunityStart: a subscriber is
     // expected to treat this pair as one atomic trigger, acting on whichever record arrives
     // first -- but only adStart carries segmentation_upid_uri (the per-cycle broadcast name to
