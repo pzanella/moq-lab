@@ -28,6 +28,7 @@ function buildReference({
     deviceRestrictions = 0,
     upidType = 0,
     upid = new Uint8Array(0),
+    durationTicks = undefined,
 }) {
     const descriptor = new NewSegmentationDescriptor();
     descriptor.tag = 0x02; // SPLICE_DESCRIPTOR_SEGMENTATION variant discriminator
@@ -36,7 +37,8 @@ function buildReference({
     descriptor.eventId = segmentationEventId;
     descriptor.canceled = false;
     descriptor.hasProgram = true;
-    descriptor.hasDuration = false;
+    descriptor.hasDuration = durationTicks !== undefined;
+    if (durationTicks !== undefined) descriptor.duration = durationTicks;
     descriptor.deliveryNotRestricted = deliveryNotRestricted;
     descriptor.webDeliveryAllowed = webDeliveryAllowed;
     descriptor.noRegionalBlackout = noRegionalBlackout;
@@ -89,6 +91,24 @@ const VECTORS = [
     { segmentationEventId: 0x3e8, segmentationTypeId: SEGMENTATION_TYPE.BREAK_END, ptsTime: 3242250n },
     { segmentationEventId: 1, segmentationTypeId: SEGMENTATION_TYPE.BREAK_START, ptsTime: 2n ** 33n - 1n }, // max 33-bit PTS
     { segmentationEventId: 0, segmentationTypeId: SEGMENTATION_TYPE.BREAK_END, ptsTime: 0n },
+    // segmentation_duration() -- exercises the 40-bit field (wider than the 32-bit ints
+    // writeBits handles; must go through writeBitsBig, same as the 33-bit pts_time above).
+    {
+        segmentationEventId: 0x3e8,
+        segmentationTypeId: SEGMENTATION_TYPE.BREAK_START,
+        ptsTime: 2702250n,
+        segmentationDurationSeconds: 6,
+        durationTicks: 6 * 90_000,
+    },
+    // Large enough duration to exercise bits 32-39 (>32-bit value), where a naive `>>> 32`
+    // shift (masked mod-32 by JS) would silently wrap and corrupt the top byte.
+    {
+        segmentationEventId: 0x3e8,
+        segmentationTypeId: SEGMENTATION_TYPE.BREAK_START,
+        ptsTime: 2702250n,
+        segmentationDurationSeconds: 60_000,
+        durationTicks: 60_000 * 90_000,
+    },
     // Program Blackout Override (0x18) -- exercises the delivery/blackout flags
     // and the URI-typed UPID, neither of which Break Start/End ever touch.
     {

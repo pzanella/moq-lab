@@ -68,6 +68,17 @@ any breaking changes worth flagging for the next person to bump.
   own ANNOUNCE via `waitForAnnounced()` before emitting `Ad Start`, capped at
   `min(8s, --ad-break-length)` so a container/ffmpeg/moq failure can't freeze
   every subsequent ad break behind one stuck wait.
+- CSAI: Break Start/End `segmentation_descriptor`s never signaled
+  `segmentation_duration` — `segmentation_duration_flag` was hardcoded off,
+  so a subscriber saw `duration: undefined` on every cue and had no way to
+  learn the avail's length without also catching Break End. `csai/scte35.mjs`'s
+  `segmentationDescriptor()` gained a `segmentationDurationSeconds` option
+  (writes the flag plus the 40-bit duration field, via `writeBitsBig` — the
+  field is wider than 32 bits, and `writeBits`'s JS `>>>` shift wraps mod 32
+  and would corrupt it); `ts-injector.mjs`'s `fireBreakCue()` now passes
+  `--ad-break-length` on both Break Start and Break End.
+  `csai/scte35.ci-check.mjs` gained two conformance vectors for the field,
+  one large enough to exercise the >32-bit path.
 
 ## 2026-08-03
 

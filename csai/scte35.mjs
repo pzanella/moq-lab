@@ -85,6 +85,7 @@ function segmentationDescriptor({
     archiveAllowedFlag = false,
     deviceRestrictions = 0b00,
     upidUri = null,
+    segmentationDurationSeconds = null,
 }) {
     const w = new BitWriter();
     w.writeBits(CUEI_IDENTIFIER, 32);
@@ -93,12 +94,19 @@ function segmentationDescriptor({
     w.writeBits(0b1111111, 7); // reserved
 
     w.writeBits(1, 1); // program_segmentation_flag: whole program, no component list
-    w.writeBits(0, 1); // segmentation_duration_flag: not signaled
+    w.writeBits(segmentationDurationSeconds !== null ? 1 : 0, 1); // segmentation_duration_flag
     w.writeBits(deliveryNotRestrictedFlag ? 1 : 0, 1);
     w.writeBits(webDeliveryAllowedFlag ? 1 : 0, 1);
     w.writeBits(noRegionalBlackoutFlag ? 1 : 0, 1);
     w.writeBits(archiveAllowedFlag ? 1 : 0, 1);
     w.writeBits(deviceRestrictions & 0b11, 2);
+
+    // segmentation_duration(): 40-bit, 90kHz ticks. Only present when the flag above is set.
+    // writeBitsBig (not writeBits) because writeBits shifts with JS's 32-bit `>>>`, which wraps
+    // the shift amount mod 32 and would corrupt this field's top byte (bits 39..32).
+    if (segmentationDurationSeconds !== null) {
+        w.writeBitsBig(BigInt(Math.round(segmentationDurationSeconds * 90_000)), 40);
+    }
 
     const upidBytes = upidUri ? Buffer.from(upidUri, "utf8") : Buffer.alloc(0);
     w.writeBits(upidUri ? 0x0f : 0x00, 8); // segmentation_upid_type: 0x0F = URI, 0x00 = not used

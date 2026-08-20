@@ -415,10 +415,12 @@ packet is passed through unchanged, except:
   idea as `ssai/impression-tracker.mjs`'s `tfdt` reads), it splices in a real,
   CRC-valid SCTE-35 `splice_info_section` — a `time_signal` command with a
   `segmentation_descriptor` for Break Start (`0x22`) or Break End (`0x23`) —
-  wrapped in a PES packet, on that PID. The encoder lives in `csai/scte35.mjs`.
-  Because this reads real timestamps rather than the wall clock, cues stay
-  accurate even if `ffmpeg` falls behind real-time under load (e.g. a heavy
-  `--abr-ladder` encode).
+  wrapped in a PES packet, on that PID. The descriptor signals
+  `segmentation_duration` (`--ad-break-length`) on both cues, so a subscriber
+  acting only on Break Start already knows the avail's length. The encoder
+  lives in `csai/scte35.mjs`. Because this reads real timestamps rather than
+  the wall clock, cues stay accurate even if `ffmpeg` falls behind real-time
+  under load (e.g. a heavy `--abr-ladder` encode).
 - Optionally (`--blackout-at`), a one-shot Program Blackout Override (`0x18`)
   cue — see "Regional blackout" below.
 - A `splice_null()` heartbeat on the SCTE-35 PID every 2 seconds, starting

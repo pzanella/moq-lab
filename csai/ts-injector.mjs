@@ -359,7 +359,10 @@ function enqueueHeartbeat() {
 
 function fireBreakCue(segmentationTypeId, segmentationEventId, label, streamSecs) {
     const ptsTime = BigInt(Math.round(streamSecs * 90000)) % 2n ** 33n;
-    const section = buildTimeSignalSection({ segmentationEventId, segmentationTypeId, ptsTime });
+    // AD_BREAK_LENGTH is signaled on both Start and End: a subscriber acting only on Start
+    // (the common case -- it's the one that tells it an avail is opening) knows the avail's
+    // length upfront, without depending on End actually arriving.
+    const section = buildTimeSignalSection({ segmentationEventId, segmentationTypeId, ptsTime, segmentationDurationSeconds: AD_BREAK_LENGTH });
     enqueueCue(section, `${label} (event_id=0x${segmentationEventId.toString(16)}, pts=${ptsTime}, pid=${scte35Pid})`);
 }
 
