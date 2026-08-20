@@ -46,6 +46,18 @@ any breaking changes worth flagging for the next person to bump.
   Media Timeline/blackout/token, lightweight signaling-only) end to end
   against real binaries after the bump.
 
+### Fixed
+- CSAI: the SCTE-35 PID carried no traffic at all until the first real
+  Break Start/End cue fired, up to `--ad-break-every` seconds into the
+  stream. `moq import ts` builds its catalog from PIDs it has actually seen
+  traffic on, so a player that fetched its catalog before that first cue
+  never saw the SCTE-35 track — cues kept firing correctly server-side, but
+  had no visible effect on that player for the rest of the session.
+  `csai/scte35.mjs` gained `buildSpliceNullSection()` (a spec `splice_null()`
+  command, no descriptors, nothing for a receiver to act on); `ts-injector.mjs`
+  now sends one immediately at stream start and every 2s afterward,
+  independent of the ad-break schedule.
+
 ## 2026-08-03
 
 ### Added

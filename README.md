@@ -421,6 +421,13 @@ packet is passed through unchanged, except:
   `--abr-ladder` encode).
 - Optionally (`--blackout-at`), a one-shot Program Blackout Override (`0x18`)
   cue — see "Regional blackout" below.
+- A `splice_null()` heartbeat on the SCTE-35 PID every 2 seconds, starting
+  immediately at stream start (not just when a real cue fires). `moq import
+  ts` builds its catalog from the PIDs it has actually seen traffic on, so
+  without a heartbeat the PID stays absent from the catalog until the first
+  real Break Start/End — which can be well after a player has already
+  fetched a catalog that doesn't mention it, leaving the track
+  undiscoverable for the rest of that session.
 
 ```
 [CSAI] 2026-07-15T14:03:44.722Z Break Start (event_id=0x3e8, pts=2702250, pid=496)

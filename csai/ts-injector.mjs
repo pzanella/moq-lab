@@ -20,7 +20,7 @@
 // same transparent-proxy trick for fMP4 boxes, reading tfdt instead of PES
 // timestamps); the two are independent and never run together — SSAI uses
 // fmp4/moq import fmp4, CSAI uses ts/moq import ts.
-import { buildTimeSignalSection, buildProgramBlackoutOverrideSection, crc32Mpeg2, SEGMENTATION_TYPE } from "./scte35.mjs";
+import { buildTimeSignalSection, buildProgramBlackoutOverrideSection, buildSpliceNullSection, crc32Mpeg2, SEGMENTATION_TYPE } from "./scte35.mjs";
 import { buildUri } from "../lib/msf-uri.mjs";
 import { createLogger } from "../lib/log.mjs";
 
@@ -262,9 +262,15 @@ const CYCLE_SECS = AD_BREAK_EVERY + AD_BREAK_LENGTH;
 // single slot, since a Break cue and the blackout cue can share a tick.
 let pendingCues = [];
 
+// How often to repeat the splice_null() heartbeat on the SCTE-35 PID (see
+// enqueueHeartbeat below) once the stream is running -- independent of, and
+// much more frequent than, the ad-break schedule itself.
+const SCTE35_HEARTBEAT_INTERVAL_SECS = 2;
+
 let lastPts = -1;
 let ptsBase = 0;
 let lastCycleIndex = -1;
+let lastHeartbeatSecs = -Infinity;
 const startFired = new Set();
 let blackoutStartFired = false;
 let blackoutEndFired = false;
@@ -280,6 +286,13 @@ function onVideoDecodeTime(pts) {
     const streamSecs = pts + ptsBase;
     const cycleIndex = Math.floor(streamSecs / CYCLE_SECS);
     const cyclePos = streamSecs % CYCLE_SECS;
+
+    // Keeps the SCTE-35 PID carrying traffic between real cues -- see
+    // enqueueHeartbeat's own comment for why this matters for track discovery.
+    if (streamSecs - lastHeartbeatSecs >= SCTE35_HEARTBEAT_INTERVAL_SECS) {
+        lastHeartbeatSecs = streamSecs;
+        enqueueHeartbeat();
+    }
 
     // Break End closes the *previous* cycle's break -- it lands exactly on this
     // boundary because CYCLE_SECS is defined as AD_BREAK_EVERY + AD_BREAK_LENGTH.
@@ -308,8 +321,8 @@ function onVideoDecodeTime(pts) {
     }
 }
 
-function enqueueCue(section, label) {
-    if (scte35Pid === null) return; // PMT not seen yet; drop rather than block startup
+function enqueueCuePackets(section) {
+    if (scte35Pid === null) return false; // PMT not seen yet; drop rather than block startup
     const pes = buildScte35Pes(section);
     const packets = [];
     // Our sections are always small enough for one PES/TS packet (see packetizePes);
@@ -322,7 +335,26 @@ function enqueueCue(section, label) {
         offset += 184;
     }
     pendingCues.push(Buffer.concat(packets));
-    log(label);
+    return true;
+}
+
+function enqueueCue(section, label) {
+    if (enqueueCuePackets(section)) log(label);
+}
+
+// A splice_null() heartbeat, logged nowhere (it carries no information a
+// subscriber needs to act on) -- its only job is to keep the SCTE-35 PID
+// carrying traffic. `moq import ts` builds its catalog from the PIDs it has
+// actually seen; without this, the PID's very first packet would be whatever
+// real cue fires first (Break Start, up to `--ad-break-every` seconds in),
+// which is typically well after a player has already fetched its catalog and
+// decided which tracks exist. That leaves the SCTE-35 track undiscoverable
+// for the rest of that player session even though cues are being injected
+// correctly -- matching the observed symptom (Break Start logged here, no
+// visible effect on the player, until a page refresh re-fetches the catalog
+// and picks up the by-then-discoverable track).
+function enqueueHeartbeat() {
+    enqueueCuePackets(buildSpliceNullSection());
 }
 
 function fireBreakCue(segmentationTypeId, segmentationEventId, label, streamSecs) {
@@ -371,6 +403,11 @@ function handlePacket(packet) {
             // gives an identical timeline, so just take the first.
             videoPid = pmtOriginal.streams.find((s) => s.streamType === H264_STREAM_TYPE)?.pid ?? null;
             log(`PMT parsed: ${pmtOriginal.streams.length} existing stream(s), scte35Pid=${scte35Pid}, videoPid=${videoPid}`);
+            // Fire the first heartbeat immediately (rather than waiting for the periodic
+            // one in onVideoDecodeTime) so the SCTE-35 PID has traffic on it from the
+            // very next packet -- see enqueueHeartbeat's comment.
+            enqueueHeartbeat();
+            lastHeartbeatSecs = 0;
         }
 
         process.stdout.write(augmentedPmtBytes(continuityCounter));

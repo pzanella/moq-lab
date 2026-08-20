@@ -11,6 +11,7 @@ export const SEGMENTATION_TYPE = {
 };
 
 const CUEI_IDENTIFIER = 0x43554549; // 'CUEI'
+const SPLICE_COMMAND_NULL = 0x00;
 const SPLICE_COMMAND_TIME_SIGNAL = 0x06;
 const SPLICE_DESCRIPTOR_SEGMENTATION = 0x02;
 
@@ -163,6 +164,50 @@ export function buildTimeSignalSection({ segmentationEventId, segmentationTypeId
         header.toBuffer(),
         afterLength.subarray(0, afterLength.length - 4),
     ]);
+    const crc = crc32Mpeg2(withoutCrc);
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc, 0);
+
+    return Buffer.concat([withoutCrc, crcBuf]);
+}
+
+/**
+ * Builds a splice_null() splice_info_section -- SCTE-35's designated heartbeat
+ * command: no descriptors, no action expected of a receiver. `moq import ts`
+ * (downstream of ts-injector.mjs) builds its catalog from the PIDs it actually
+ * observes in the TS mux, so the SCTE-35 PID is only discoverable once a first
+ * splice_info_section has flowed through it -- without a heartbeat, that's the
+ * first real Break Start/End cue, which can be minutes after a player already
+ * fetched its (then SCTE-35-less) catalog. Sending splice_null on the PID from
+ * the very start makes the track discoverable immediately, independent of the
+ * ad-break schedule -- see ts-injector.mjs's heartbeat scheduling.
+ * @returns {Buffer}
+ */
+export function buildSpliceNullSection() {
+    const body = new BitWriter();
+    body.writeBits(0, 8); // protocol_version
+    body.writeBits(0, 1); // encrypted_packet
+    body.writeBits(0, 6); // encryption_algorithm
+    body.writeBitsBig(0n, 33); // pts_adjustment
+    body.writeBits(0, 8); // cw_index
+    body.writeBits(0xfff, 12); // tier (not used)
+    body.writeBits(0, 12); // splice_command_length: splice_null() carries no body
+    body.writeBits(SPLICE_COMMAND_NULL, 8); // splice_command_type
+    const bodyHead = body.toBuffer();
+
+    const descriptorLoop = new BitWriter().writeBits(0, 16).toBuffer(); // descriptor_loop_length = 0
+
+    const afterLength = Buffer.concat([bodyHead, descriptorLoop, Buffer.alloc(4)]);
+    const sectionLength = afterLength.length;
+
+    const header = new BitWriter();
+    header.writeBits(0xfc, 8); // table_id
+    header.writeBits(0, 1); // section_syntax_indicator
+    header.writeBits(0, 1); // private_indicator
+    header.writeBits(0b11, 2); // sap_type: not specified
+    header.writeBits(sectionLength, 12);
+
+    const withoutCrc = Buffer.concat([header.toBuffer(), afterLength.subarray(0, afterLength.length - 4)]);
     const crc = crc32Mpeg2(withoutCrc);
     const crcBuf = Buffer.alloc(4);
     crcBuf.writeUInt32BE(crc, 0);
