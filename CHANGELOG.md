@@ -38,6 +38,38 @@ any breaking changes worth flagging for the next person to bump.
   already up to date). `./stream.sh bbb --sgai-mode` is now a single command
   end to end on a machine with Podman and Node.js already installed.
 
+- Updated dependencies to the newest versions that need no code changes:
+  - `moq-cli` 0.9.5 → 0.10.0 (`Containerfile`).
+  - `@moq/net` 0.2.2 → 0.3.5, `@moq/msf` 0.2.0 → 0.2.2, `ws` 8.21.1 →
+    8.22.0, `zod` 4.4.3 → 4.6.5, `pnpm` 10.12.3 → 10.34.6. `@moq/msf` 0.2.2
+    still needs `patches/@moq__msf.patch`.
+  - GitHub Actions: `checkout` v4 → v7, `setup-node` v4 → v7,
+    `upload-artifact` v4 → v7, `download-artifact` v4 → v8. The v4 actions
+    run on Node.js 20, which GitHub is retiring.
+  - CI downloaded `moq-relay` 0.14.3, not the 0.14.5 in the `Containerfile`.
+    Both now use 0.14.5.
+
+  Re-tested all pipeline modes end to end. Newer versions were tried and not
+  taken:
+  - `moq-relay` 0.14.18: the SGAI blackout `ENFORCE` event, emitted in the
+    same tick as `Ad End`, is lost in about half of the runs (10 of 19),
+    against about 1 in 10 with 0.14.5. 0.15+ also renames config keys
+    (`[server]` → `[listen]`, `listen` → `bind`).
+  - `moq-cli` 0.11+: refuses ffmpeg's `frag_every_frame` output (repeated
+    `tfdt` with audio and video). Moving needs new ffmpeg flags in
+    `run-stream.sh` and `sgai/ad-decisioning-publisher.mjs`. 0.12+ also
+    renames `--client-connect` to `--connect`.
+  - `@moq/net` 0.4 / `@moq/msf` 0.3: new `Origin` based API.
+    `Broadcast.Producer.requested()` and `readFrameSequence()` are gone, so
+    the `sgai/` scripts need a rewrite.
+  - `pnpm` 11/12: new major versions, not needed.
+
+  Known issue, not caused by this update: two SGAI events emitted within a
+  few ms can lose one of them on the way to the subscriber. Locally (macOS,
+  relay in a Podman VM) `smoke-test-sgai` loses `Placement Opportunity Start`
+  in most runs, with old and new versions alike; it passes on the Linux CI
+  runners.
+
 - Bumped `@moq/net` 0.2.1 → 0.2.2, `moq-cli` 0.9.4 → 0.9.5, `moq-relay`
   0.14.4 → 0.14.5. No breaking changes found (full `@moq/net` `.d.ts` diff:
   only new optional `origin`/Exclude-Hop fields for federated/clustered

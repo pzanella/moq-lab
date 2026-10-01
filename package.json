@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
-  "packageManager": "pnpm@10.12.3",
+  "packageManager": "pnpm@10.34.6",
   "description": "Local Media over QUIC (MoQ) streaming sandbox with SSAI, CSAI, and SGAI ad-insertion modes. See README.md.",
   "keywords": [
     "moq",
@@ -22,10 +22,10 @@
     "stream": "./stream.sh"
   },
   "dependencies": {
-    "@moq/msf": "0.2.0",
-    "@moq/net": "0.2.2",
-    "ws": "^8.21.1",
-    "zod": "^4.4.3"
+    "@moq/msf": "0.2.2",
+    "@moq/net": "0.3.5",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
   },
   "engines": {
     "node": ">=20.0.0"

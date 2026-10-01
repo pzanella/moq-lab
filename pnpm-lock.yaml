@@ -14,17 +14,17 @@ importers:
   .:
     dependencies:
       '@moq/msf':
-        specifier: 0.2.0
-        version: 0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)
-      '@moq/net':
         specifier: 0.2.2
-        version: 0.2.2(zod@4.4.3)
+        version: 0.2.2(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)
+      '@moq/net':
+        specifier: 0.3.5
+        version: 0.3.5(@zod/mini@4.6.5(zod@4.6.5))(zod@4.6.5)
       ws:
-        specifier: ^8.21.1
-        version: 8.21.1
+        specifier: ^8.22.0
+        version: 8.22.0
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@astronautlabs/scte35':
         specifier: 0.1.1
@@ -41,23 +41,24 @@ packages:
   '@astronautlabs/scte35@0.1.1':
     resolution: {integrity: sha512-7B0P2vra+taokVOgHZwYPZWZ7aiIw/wJ+/LlOtvL1ww6gKXTVDpd3rEzi0eWLE0NhSdVXQUHqEwbggAHPkPkJg==}
 
-  '@moq/msf@0.2.0':
-    resolution: {integrity: sha512-gTeWd5/NpzxbYw9Cf8OfE+ltb6e4tNUXzUc+CkXgPRpT9BvRoE+4vYivhpFNd/M9+sTgqQtU2pK91VPbzbbrIg==}
+  '@moq/msf@0.2.2':
+    resolution: {integrity: sha512-vc0ihQmd9DdXjfSH4GFz/3TF7pddap9OXuwH+ukw8EUvsecD0HPvBLoGCl7fZHpuFJQ/opEU44J+5pzIqtHu+A==}
 
-  '@moq/net@0.2.2':
-    resolution: {integrity: sha512-r89NJgf85H8q7egnY0NuVpwcszKJokbhSMxSJhOxt3bSEAFpCSESFT+hOe47lJgXl9hVSs+1ucmlKgQWUYqsGQ==}
+  '@moq/net@0.3.5':
+    resolution: {integrity: sha512-H87cqGt9aFLgZ6DtA2xzbL4KrLWGze+UuvU6knRJazIkEek1t7PxoSr+cn+hLAqUSeKGSd6G5JjE3g5xjZMHIw==}
     peerDependencies:
-      zod: ^4.0.0
+      '@zod/mini': ^4.5.0
+      zod: ^4.5.0
 
-  '@moq/qmux@0.3.2':
-    resolution: {integrity: sha512-8ymBriVxvD5ISfnTJ3k07Zzt4pBOoh/JnulGCjenY2NrUdCr5PUOy42y/9drSXA3SfCfOdaw4A+BSrWN92qVvg==}
+  '@moq/qmux@0.3.3':
+    resolution: {integrity: sha512-Ez1GCVwpyNGB0eWvhKIXOjXrfRlMdmO0lpJ7gqInZFzsOsYTyML0WRgh24Itczp9Kev0CXsUA/K+XrGs1dRKUA==}
 
-  '@moq/signals@0.2.0':
-    resolution: {integrity: sha512-BwmoJFoSIpkeRczGrNpNHWQTYelOwxuDkJvy9wrQGQn5ltl9vKifhWMpE8dlOgQigdGtwn9lOFkzOxLA0jZWmQ==}
+  '@moq/signals@0.2.5':
+    resolution: {integrity: sha512-xjwLI2ZR771WdOKlSJHx07VLkkWlZCf0oGUG1Us7DbrwCf0AVSGmSoCg34Y7fE+os3whJWXAMjLa9bMobrQPIg==}
     peerDependencies:
       '@types/react': ^19.2.17
-      react: ^19.0.0
-      solid-js: ^1.9.14
+      react: ^19.3.0
+      solid-js: ^1.9.15
     peerDependenciesMeta:
       '@types/react':
         optional: true
@@ -69,8 +70,16 @@ packages:
   '@moq/web-socket-stream@0.1.1':
     resolution: {integrity: sha512-VKi/GE/CLqmbEZlgNbBLbAFk2pQTxT+KUD2DjCSoxqZxbS3KBe5BBZ0m3fila4fEGyll2JT5MmgEyVr4zkZEVA==}
 
+  '@zod/mini@4.6.5':
+    resolution: {integrity: sha512-TSoVYZYRDIVdCGpaikfJ+mZ6RDSb4fOT/iV/GGBpuaD4/+U9Y+gEVNVFJx0uYWbvQidIKNgPWKG/jy0o2VBoJg==}
+    peerDependencies:
+      zod: ^4.6.0
+
   async-mutex@0.5.0:
     resolution: {integrity: sha512-1A94B18jkJ3DYq284ohPxoXbfTA5HsQ7/Mf4DEhcyLx3Bz27Rh59iScbB6EPiP+B+joue6YCxcMXSbFC1tZKwA==}
+
+  bowser@2.14.1:
+    resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
 
   reflect-metadata@0.2.2:
     resolution: {integrity: sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==}
@@ -78,8 +87,8 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
-  ws@8.21.1:
-    resolution: {integrity: sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==}
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -90,8 +99,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
 
@@ -101,42 +110,51 @@ snapshots:
     dependencies:
       '@astronautlabs/bitstream': 2.1.2
 
-  '@moq/msf@0.2.0(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)':
+  '@moq/msf@0.2.2(patch_hash=c6e5aae05aec2824b65b0e4022bddc453440f1ff5d6f18925c5d4e13eaa26db3)':
     dependencies:
-      '@moq/net': 0.2.2(zod@4.4.3)
-      zod: 4.4.3
+      '@moq/net': 0.3.5(@zod/mini@4.6.5(zod@4.6.5))(zod@4.6.5)
+      '@zod/mini': 4.6.5(zod@4.6.5)
+      zod: 4.6.5
     transitivePeerDependencies:
       - '@types/react'
       - react
       - solid-js
 
-  '@moq/net@0.2.2(zod@4.4.3)':
+  '@moq/net@0.3.5(@zod/mini@4.6.5(zod@4.6.5))(zod@4.6.5)':
     dependencies:
-      '@moq/qmux': 0.3.2
-      '@moq/signals': 0.2.0
+      '@moq/qmux': 0.3.3
+      '@moq/signals': 0.2.5
+      '@zod/mini': 4.6.5(zod@4.6.5)
       async-mutex: 0.5.0
-      zod: 4.4.3
+      bowser: 2.14.1
+      zod: 4.6.5
     transitivePeerDependencies:
       - '@types/react'
       - react
       - solid-js
 
-  '@moq/qmux@0.3.2':
+  '@moq/qmux@0.3.3':
     dependencies:
       '@moq/web-socket-stream': 0.1.1
 
-  '@moq/signals@0.2.0': {}
+  '@moq/signals@0.2.5': {}
 
   '@moq/web-socket-stream@0.1.1': {}
+
+  '@zod/mini@4.6.5(zod@4.6.5)':
+    dependencies:
+      zod: 4.6.5
 
   async-mutex@0.5.0:
     dependencies:
       tslib: 2.8.1
 
+  bowser@2.14.1: {}
+
   reflect-metadata@0.2.2: {}
 
   tslib@2.8.1: {}
 
-  ws@8.21.1: {}
+  ws@8.22.0: {}
 
-  zod@4.4.3: {}
+  zod@4.6.5: {}
