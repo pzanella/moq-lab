@@ -38,6 +38,33 @@ any breaking changes worth flagging for the next person to bump.
   already up to date). `./stream.sh bbb --sgai-mode` is now a single command
   end to end on a machine with Podman and Node.js already installed.
 
+- Updated dependencies to the newest versions that need no code changes:
+  - `moq-cli` 0.9.5 → 0.10.0 (`Containerfile`).
+  - `@moq/net` 0.2.2 → 0.3.5, `@moq/msf` 0.2.0 → 0.2.2, `ws` 8.21.1 →
+    8.22.0, `zod` 4.4.3 → 4.6.5, `pnpm` 10.12.3 → 10.34.6. `@moq/msf` 0.2.2
+    still needs `patches/@moq__msf.patch`.
+  - GitHub Actions: `checkout` v4 → v7, `setup-node` v4 → v7,
+    `upload-artifact` v4 → v7, `download-artifact` v4 → v8. The v4 actions
+    run on Node.js 20, which GitHub is retiring.
+  - CI downloaded `moq-relay` 0.14.3, not the 0.14.5 in the `Containerfile`.
+    Both now use 0.14.5.
+
+  Re-tested all pipeline modes end to end. Newer versions were tried and not
+  taken:
+  - `moq-relay` 0.14.18: it drops SGAI events that are sent close together
+    much more often than 0.14.5. Even with the fix below (50 ms between
+    events) it still lost one event in 6 local runs of `smoke-test-sgai`.
+    0.15+ also renames config keys (`[server]` → `[listen]`, `listen` →
+    `bind`).
+  - `moq-cli` 0.11+: refuses ffmpeg's `frag_every_frame` output (repeated
+    `tfdt` with audio and video). Moving needs new ffmpeg flags in
+    `run-stream.sh` and `sgai/ad-decisioning-publisher.mjs`. 0.12+ also
+    renames `--client-connect` to `--connect`.
+  - `@moq/net` 0.4 / `@moq/msf` 0.3: new `Origin` based API.
+    `Broadcast.Producer.requested()` and `readFrameSequence()` are gone, so
+    the `sgai/` scripts need a rewrite.
+  - `pnpm` 11/12: new major versions, not needed.
+
 - Bumped `@moq/net` 0.2.1 → 0.2.2, `moq-cli` 0.9.4 → 0.9.5, `moq-relay`
   0.14.4 → 0.14.5. No breaking changes found (full `@moq/net` `.d.ts` diff:
   only new optional `origin`/Exclude-Hop fields for federated/clustered
@@ -47,6 +74,16 @@ any breaking changes worth flagging for the next person to bump.
   against real binaries after the bump.
 
 ### Fixed
+- SGAI: an event could be lost on the way to the subscriber when it was
+  sent at the same time as another one. Each event is its own MoQ group,
+  and the older of two groups written in the same tick can be skipped. The
+  publisher already waited 50 ms inside the Start and End pairs, but not in
+  two cases: the blackout timer runs on its own and can fire together with
+  `Ad End`, and when the ad broadcast's ANNOUNCE wait lasts the whole break,
+  `Ad End` was sent right after `Placement Opportunity Start`. In
+  `smoke-test-sgai` this lost `Placement Opportunity Start` in every break.
+  Now every event goes through one queue in
+  `sgai/ad-decisioning-publisher.mjs` that keeps 50 ms between writes.
 - CSAI: the SCTE-35 PID carried no traffic at all until the first real
   Break Start/End cue fired, up to `--ad-break-every` seconds into the
   stream. `moq import ts` builds its catalog from PIDs it has actually seen

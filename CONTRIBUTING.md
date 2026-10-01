@@ -58,7 +58,10 @@ inside Podman (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
   `@moq/net`/`@moq/msf` (`package.json`) are pinned on purpose. They move
   fast and have shipped breaking changes between minor versions before —
   bump both sides deliberately and re-run the smoke tests, not just
-  `npm outdated`.
+  `npm outdated`. The `moq-relay` version is set in two places: the
+  `Containerfile` and `MOQ_RELAY_VERSION` at the top of
+  `.github/workflows/ci.yml`. Change both, so CI tests the same relay that
+  the sandbox uses.
 - **Update README.md in the same PR.** Behavior changes (new flags, new
   broadcast names, changed defaults) must be reflected in the relevant
   section — this repo has no separate docs site, the README is the docs.

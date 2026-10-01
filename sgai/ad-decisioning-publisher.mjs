@@ -190,7 +190,24 @@ const mediaTimeTracks = [];
     }
 })();
 
+// Every event is its own single-frame group, and two groups appended in the same tick race
+// each other to the subscriber: the older one can arrive late or be skipped entirely. Events
+// can coincide from independent sources (the blackout timer vs. the ad-break loop, or an
+// ANNOUNCE wait that runs up to the end of its break), so instead of staggering each call
+// site, every write goes through one queue that keeps EMIT_GAP_MS between consecutive
+// groups. The queue also preserves call order, which adStart -> placementOpportunityStart
+// relies on (see the ad-break loop below).
+const EMIT_GAP_MS = 50;
+let emitQueue = Promise.resolve();
+
 function emit(record) {
+    emitQueue = emitQueue.then(async () => {
+        writeEvent(record);
+        await new Promise((resolve) => setTimeout(resolve, EMIT_GAP_MS));
+    });
+}
+
+function writeEvent(record) {
     for (let i = eventsTracks.length - 1; i >= 0; i--) {
         try {
             eventsTracks[i].writeJson(record);
@@ -347,19 +364,13 @@ while (running) {
     // expected to treat this pair as one atomic trigger, acting on whichever record arrives
     // first -- but only adStart carries segmentation_upid_uri (the per-cycle broadcast name to
     // fetch), so if placementOpportunityStart won the race, the subscriber would act with no
-    // broadcast name to resolve. Writing them back-to-back with no gap isn't enough on its own:
-    // two independent single-frame groups appended in the same tick can race each other to the
-    // subscriber, and whichever loses can arrive after the other or be skipped over entirely --
-    // see the identical gap on the End pair below. A short stagger gives the first write a clear
-    // head start instead of leaving the order to chance.
+    // broadcast name to resolve. emit()'s queue keeps them in this order with a gap between.
     emit(adStart(breakStartMs, adEventId, adUpidUri(cycle)));
-    await new Promise((resolve) => setTimeout(resolve, 50));
     emit(placementOpportunityStart(breakStartMs, poEventId));
 
     await sleepUntil(breakEndMs);
     if (!running) break;
     emit(adEnd(breakEndMs, adEventId));
-    await new Promise((resolve) => setTimeout(resolve, 50));
     emit(placementOpportunityEnd(breakEndMs, poEventId));
     stopAd(cycleAdBroadcastName);
 
