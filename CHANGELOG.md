@@ -51,10 +51,11 @@ any breaking changes worth flagging for the next person to bump.
 
   Re-tested all pipeline modes end to end. Newer versions were tried and not
   taken:
-  - `moq-relay` 0.14.18: the SGAI blackout `ENFORCE` event, emitted in the
-    same tick as `Ad End`, is lost in about half of the runs (10 of 19),
-    against about 1 in 10 with 0.14.5. 0.15+ also renames config keys
-    (`[server]` → `[listen]`, `listen` → `bind`).
+  - `moq-relay` 0.14.18: it drops SGAI events that are sent close together
+    much more often than 0.14.5. Even with the fix below (50 ms between
+    events) it still lost one event in 6 local runs of `smoke-test-sgai`.
+    0.15+ also renames config keys (`[server]` → `[listen]`, `listen` →
+    `bind`).
   - `moq-cli` 0.11+: refuses ffmpeg's `frag_every_frame` output (repeated
     `tfdt` with audio and video). Moving needs new ffmpeg flags in
     `run-stream.sh` and `sgai/ad-decisioning-publisher.mjs`. 0.12+ also
@@ -63,12 +64,6 @@ any breaking changes worth flagging for the next person to bump.
     `Broadcast.Producer.requested()` and `readFrameSequence()` are gone, so
     the `sgai/` scripts need a rewrite.
   - `pnpm` 11/12: new major versions, not needed.
-
-  Known issue, not caused by this update: two SGAI events emitted within a
-  few ms can lose one of them on the way to the subscriber. Locally (macOS,
-  relay in a Podman VM) `smoke-test-sgai` loses `Placement Opportunity Start`
-  in most runs, with old and new versions alike; it passes on the Linux CI
-  runners.
 
 - Bumped `@moq/net` 0.2.1 → 0.2.2, `moq-cli` 0.9.4 → 0.9.5, `moq-relay`
   0.14.4 → 0.14.5. No breaking changes found (full `@moq/net` `.d.ts` diff:
@@ -79,6 +74,16 @@ any breaking changes worth flagging for the next person to bump.
   against real binaries after the bump.
 
 ### Fixed
+- SGAI: an event could be lost on the way to the subscriber when it was
+  sent at the same time as another one. Each event is its own MoQ group,
+  and the older of two groups written in the same tick can be skipped. The
+  publisher already waited 50 ms inside the Start and End pairs, but not in
+  two cases: the blackout timer runs on its own and can fire together with
+  `Ad End`, and when the ad broadcast's ANNOUNCE wait lasts the whole break,
+  `Ad End` was sent right after `Placement Opportunity Start`. In
+  `smoke-test-sgai` this lost `Placement Opportunity Start` in every break.
+  Now every event goes through one queue in
+  `sgai/ad-decisioning-publisher.mjs` that keeps 50 ms between writes.
 - CSAI: the SCTE-35 PID carried no traffic at all until the first real
   Break Start/End cue fired, up to `--ad-break-every` seconds into the
   stream. `moq import ts` builds its catalog from PIDs it has actually seen
