@@ -224,6 +224,54 @@ always uses the file's real duration (see [section
 `--ssai-mode`, `--csai-mode`, and `--sgai-mode` are mutually exclusive — each
 uses a different pipeline.
 
+### Access control (JWT)
+
+By default the stream is public: anyone who can reach the port can watch it,
+and also publish to the relay. Add `--auth` or `--auth-key FILE` to accept
+only connections that carry a valid [JWT](https://jwt.io/introduction). Both
+work with every mode above.
+
+```bash
+# A new signing key for this run only. Old tokens stop working on the next run.
+./stream.sh bbb --auth
+
+# Your own signing key, so the tokens you give out stay valid across runs.
+# Create the key once (the moq-lab image exists after the first ./stream.sh run):
+podman run --rm --entrypoint moq moq-lab token generate --out - > my-key.jwk
+./stream.sh bbb --auth-key my-key.jwk
+```
+
+At startup, `stream.sh` prints a viewer token and the relay URL with the
+token already in it:
+
+```
+Auth enabled: the relay only accepts connections with a valid JWT.
+Viewer token (subscribe only, valid for 24 hours):
+  eyJ0eXAiOiJKV1Qi...
+Relay URL for the player: https://localhost:4443/?jwt=eyJ0eXAiOiJKV1Qi...
+```
+
+How it works:
+
+- The relay checks every connection, and every call to its HTTP API
+  (section 8), against the signing key. A request without a token, or with a
+  token signed by another key, is refused (HTTP `401`).
+- The viewer token can only **subscribe**. It cannot publish.
+- `stream.sh` also signs a publish token for its own publishers (the content
+  stream, the ads, and the SGAI signaling). You don't need to do anything for
+  these.
+- The key and tokens are made with the `moq token` command inside the Podman
+  image, so you don't need any other tool on your machine.
+
+Keep `my-key.jwk` private: anyone who has it can sign their own tokens. To
+make more viewer tokens with your key (for example, with a different expiry
+time), use `moq token sign`:
+
+```bash
+podman run --rm -i --entrypoint moq moq-lab token sign --key - --subscribe "" \
+  --expires "$(( $(date +%s) + 3600 ))" < my-key.jwk
+```
+
 ### All flags at a glance
 
 | Flag | Default | Description |
@@ -239,6 +287,8 @@ uses a different pipeline.
 | `--blackout-at N` | off | CSAI or SGAI: fire a one-shot Program Blackout Override N seconds in |
 | `--blackout-length N` | `10` | CSAI or SGAI: seconds until the blackout restores |
 | `--personalized-ads` | off | SGAI only: template ad upids with a `%token%` placeholder |
+| `--auth` | off | Only accept connections with a JWT; a new key is made for this run |
+| `--auth-key FILE` | off | Like `--auth`, but sign with the key in `FILE` |
 
 ### npm/pnpm shortcut
 
@@ -258,6 +308,10 @@ https://localhost:4443
 
 The relay uses a self-signed TLS certificate (generated at startup). Your
 browser will warn about it; accept it once and the player will work.
+
+With `--auth` or `--auth-key`, use the URL that `stream.sh` prints instead.
+It has the viewer token in it: `https://localhost:4443/?jwt=<token>` (see
+[Access control](#access-control-jwt)).
 
 ### Broadcast names
 
@@ -667,6 +721,11 @@ what the browser player uses. Passing `https://` here gets converted to
 version number"). This only affects the two Node scripts in `sgai/` — the
 player's `moq.url` config in section 4 correctly uses `https://`.
 
+**With `--auth` or `--auth-key`:** add `?jwt=<viewer token>` (printed by
+`stream.sh` at startup) to the `curl` URLs and to `--url`. Put it before the
+`#token=...` fragment:
+`--url "http://localhost:4443/?jwt=<viewer token>#token=XYZ789"`.
+
 **Current limitation**: this sandbox only covers the server/host delivery
 side. A player that actually acts on this signaling — subscribing to the
 events broadcast and switching between the content and ad tracks — is a
@@ -696,6 +755,13 @@ curl -s http://localhost:4443/fetch/bbb-events/catalog | jq
 The `/announced` endpoint is also used by the container startup script to
 know when the relay is ready before publishing starts.
 
+With `--auth` or `--auth-key`, every call needs a token, or the relay answers
+`401`. Add the viewer token that `stream.sh` prints:
+
+```bash
+curl "http://localhost:4443/announced?jwt=<viewer token>"
+```
+
 ---
 
 ## 9. Troubleshooting
@@ -721,6 +787,12 @@ stream. Run `ffprobe assets/ad.mp4` locally to inspect it.
 Your browser blocks self-signed certificates on QUIC by default. Open
 `https://localhost:4443` directly in the browser, accept the certificate
 warning, then reload the player page.
+
+**`401 Unauthorized`, or the player can't connect (with `--auth`/`--auth-key`)**
+The request has no token, or the token is wrong. Check that the URL has
+`?jwt=<token>` and that the token is the one `stream.sh` printed in **this**
+run: with `--auth`, every run makes a new key, so old tokens stop working.
+Viewer tokens also expire after 24 hours. A viewer token can't publish.
 
 **The stream freezes at the ad→content transition (SSAI)**
 This can happen if the ad file has a very different frame rate or resolution

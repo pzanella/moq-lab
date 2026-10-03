@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: stream.sh [name] [--abr-ladder] [--port N] [--ssai-mode] [--ad-break-every N]
 #                   [--csai-mode] [--ad-break-length N]
-#                   [--sgai-mode]
+#                   [--sgai-mode] [--auth] [--auth-key FILE]
 #
 # --ad-break-every N   Seconds of content between ad breaks (default: 30). Shared by
 #                      --ssai-mode, --csai-mode, and --sgai-mode.
@@ -21,6 +21,11 @@
 # --blackout-length N  CSAI or SGAI: seconds until the blackout restores (default: 10).
 # --personalized-ads   SGAI only: template ad upids with a %token% placeholder --
 #                      see the --token flag on sgai/debug-subscriber.mjs.
+# --auth               Only accept connections with a JWT. A new signing key is made for
+#                      this run; a viewer token is printed at startup. Without --auth or
+#                      --auth-key, the stream is public.
+# --auth-key FILE      Like --auth, but sign with this key (a JWK file, e.g. from
+#                      `moq token generate`), so tokens stay valid across runs.
 set -euo pipefail
 
 # Yellow only when stderr is an actual terminal -- keeps piped/redirected output
@@ -45,6 +50,8 @@ SGAI=false
 BLACKOUT_AT=""
 BLACKOUT_LENGTH=10
 PERSONALIZED_ADS=false
+AUTH=false
+AUTH_KEY_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -58,6 +65,8 @@ while [ $# -gt 0 ]; do
         --blackout-at) BLACKOUT_AT="$2"; shift 2 ;;
         --blackout-length) BLACKOUT_LENGTH="$2"; shift 2 ;;
         --personalized-ads) PERSONALIZED_ADS=true; shift ;;
+        --auth) AUTH=true; shift ;;
+        --auth-key) AUTH=true; AUTH_KEY_FILE="$2"; shift 2 ;;
         *) NAME="$1"; shift ;;
     esac
 done
@@ -84,6 +93,11 @@ fi
 
 if [ "$PERSONALIZED_ADS" = true ] && [ "$SGAI" != true ]; then
     warn "--personalized-ads only applies to --sgai-mode; ignored here."
+fi
+
+if [ -n "$AUTH_KEY_FILE" ] && [ ! -f "$AUTH_KEY_FILE" ]; then
+    echo "--auth-key: $AUTH_KEY_FILE not found. Create one with: podman run --rm --entrypoint moq moq-lab token generate --out - > $AUTH_KEY_FILE" >&2
+    exit 1
 fi
 
 # This whole project is self-contained -- MOQ_DIR is the only path this
@@ -182,6 +196,29 @@ fi
 AD_BROADCAST="$NAME-ad.hang"
 EVENTS_BROADCAST="$NAME-events"
 
+# Made with the image's own `moq token`, so the host needs no extra tools. run-stream.sh
+# gets the key and a publish token through the environment.
+JWT_QUERY=""
+AUTH_ARGS=()
+if [ "$AUTH" = true ]; then
+    moq_cli() { podman run --rm -i --entrypoint moq "$IMAGE" "$@"; }
+    if [ -n "$AUTH_KEY_FILE" ]; then
+        AUTH_KEY=$(cat "$AUTH_KEY_FILE")
+    else
+        AUTH_KEY=$(moq_cli token generate --out -)
+    fi
+    PUBLISH_JWT=$(printf '%s' "$AUTH_KEY" | moq_cli token sign --key - --publish "" --subscribe "")
+    VIEWER_JWT=$(printf '%s' "$AUTH_KEY" | moq_cli token sign --key - --subscribe "" \
+        --expires "$(( $(date +%s) + 86400 ))")
+    JWT_QUERY="?jwt=$PUBLISH_JWT"
+    AUTH_ARGS=(-e "MOQ_LAB_AUTH_KEY=$AUTH_KEY" -e "MOQ_LAB_JWT=$PUBLISH_JWT")
+
+    echo "Auth enabled: the relay only accepts connections with a valid JWT." >&2
+    echo "Viewer token (subscribe only, valid for 24 hours):" >&2
+    echo "  $VIEWER_JWT" >&2
+    echo "Relay URL for the player: https://localhost:${PORT}/?jwt=$VIEWER_JWT" >&2
+fi
+
 CONTAINER_VOLUMES=(-v "$INPUT:/media/input.mp4:ro")
 if [ "$SSAI" = true ] || [ "$SGAI" = true ]; then
     CONTAINER_VOLUMES+=(-v "$AD_INPUT:/media/ad.mp4:ro")
@@ -189,7 +226,7 @@ fi
 
 if [ "$SGAI" = true ]; then
     podman run --name "$CONTAINER_NAME" --rm -d --init \
-        "${CONTAINER_VOLUMES[@]}" \
+        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" "$SGAI" "$AD_BROADCAST" \
         >/dev/null
@@ -199,7 +236,7 @@ if [ "$SGAI" = true ]; then
     trap 'kill "$LOGS_PID" 2>/dev/null || true; rm -f "$CONTAINER_LOG"; cleanup' EXIT
 
     echo "Waiting for relay HTTP API on the host..." >&2
-    until curl -sf "http://localhost:${PORT}/announced" > /dev/null 2>&1; do
+    until curl -sf "http://localhost:${PORT}/announced${JWT_QUERY}" > /dev/null 2>&1; do
         sleep 0.5
     done
 
@@ -218,7 +255,7 @@ if [ "$SGAI" = true ]; then
     # WebSocket/qmux is plain HTTP; TLS only applies to its native QUIC/WebTransport
     # listener, which Node can't use (no WebTransport support). See README section 7.
     AD_DECISIONING_ARGS=(
-        --url "http://localhost:${PORT}"
+        --url "http://localhost:${PORT}/${JWT_QUERY}"
         --content-broadcast "$BROADCAST"
         --ad-broadcast "$AD_BROADCAST"
         --events-broadcast "$EVENTS_BROADCAST"
@@ -236,7 +273,7 @@ else
     # "false" "" fill run-stream.sh's SGAI/AD_BROADCAST positions (unused here) so
     # BLACKOUT_AT/BLACKOUT_LENGTH land in its CSAI blackout positions after them.
     podman run --name "$CONTAINER_NAME" --rm -it --init \
-        "${CONTAINER_VOLUMES[@]}" \
+        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" \
         false "" "$BLACKOUT_AT" "$BLACKOUT_LENGTH"
