@@ -78,8 +78,8 @@ Timeline, blackout, and `%token%` templating a subscriber receives (no
 Podman, so no real content broadcast — the Media Timeline needs one, see
 below). `smoke-test-podman-build` builds the actual sandbox image and the
 synthetic test clip once, sharing both via artifacts with one job per
-pipeline mode (`smoke-test-podman-base`, `-ssai`, `-ssai-abr`, `-csai`,
-`-sgai`) — split out so each mode gets its own pass/fail check instead of
+pipeline mode (`smoke-test-podman-base`, `-auth`, `-ssai`, `-ssai-abr`,
+`-csai`, `-sgai`) — split out so each mode gets its own pass/fail check instead of
 one job with five sequential steps, and a failure in one doesn't block the
 others from reporting. Together they check the relay's HTTP API (broadcast
 announced, catalog shape, SCTE-35 track present, real Media Timeline entries

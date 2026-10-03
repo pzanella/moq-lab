@@ -25,6 +25,9 @@
 //     --container-name moq-stream-1234 --relay-port 4443 --ad-file /tmp/ad_normalized.mp4 \
 //     [--blackout-at 45] [--blackout-length 10] [--blackout-alt-upid moqt://localhost/alt.hang] \
 //     [--upid-token-template true]
+//
+// On a relay started with stream.sh --auth/--auth-key, add a publish token to --url:
+// --url "http://localhost:4443/?jwt=<token>".
 import { spawn } from "node:child_process";
 import * as Msf from "@moq/msf";
 import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced } from "./transport.mjs";
@@ -282,10 +285,14 @@ function emitMediaTimelineEntry(entry) {
 
 // Launches a single playthrough of the ad, from its own frame 0, as a detached process inside
 // the sandbox container, publishing under this cycle's own unique broadcast name.
+// The ad publish reuses --url's publish token, if any.
+const jwt = new URL(url).searchParams.get("jwt");
+const adRelayUrl = `http://localhost:${relayPort}/${jwt ? `?jwt=${jwt}` : ""}`;
+
 function publishAdOnce(broadcastName) {
     const cmd = `ffmpeg -hide_banner -v quiet -re -i "${adFile}" -c copy ` +
         `-f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - | ` +
-        `moq --client-connect "http://localhost:${relayPort}" --broadcast "${broadcastName}" import fmp4`;
+        `moq --client-connect "${adRelayUrl}" --broadcast "${broadcastName}" import fmp4`;
     const proc = spawn("podman", ["exec", "-d", containerName, "sh", "-c", cmd], { stdio: "ignore" });
     proc.on("error", (err) => log(`failed to launch ad publish: ${err.message}`));
 }

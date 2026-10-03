@@ -245,6 +245,72 @@ jobs:
           "
           podman rm -f ci-base
 
+  # Same base pipeline, with the relay started the way stream.sh --auth starts it:
+  # only connections carrying a JWT signed with the key are accepted.
+  smoke-test-podman-auth:
+    needs: smoke-test-podman-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
+
+      - name: Smoke test -- JWT auth (base pipeline)
+        run: |
+          moq_cli() { podman run --rm -i --entrypoint moq moq-lab "$@"; }
+          KEY=$(moq_cli token generate --out -)
+          PUBLISH_JWT=$(printf '%s' "$KEY" | moq_cli token sign --key - --publish "" --subscribe "")
+          VIEWER_JWT=$(printf '%s' "$KEY" | moq_cli token sign --key - --subscribe "")
+          OTHER_JWT=$(moq_cli token generate --out - | moq_cli token sign --key - --subscribe "")
+
+          podman run -d --name ci-auth --init \
+            -e "MOQ_LAB_AUTH_KEY=$KEY" -e "MOQ_LAB_JWT=$PUBLISH_JWT" \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -p 15448:15448/udp -p 15448:15448/tcp \
+            moq-lab /media/input.mp4 ci-auth.hang false 15448 false 30 false 6
+
+          ok=false
+          for _ in $(seq 1 30); do
+            if curl -sf "http://localhost:15448/announced?jwt=$VIEWER_JWT" 2>/dev/null | grep -q "ci-auth.hang"; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "broadcast never announced with a valid token"; podman logs ci-auth; exit 1
+          fi
+
+          fail=0
+          status() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
+          [ "$(status http://localhost:15448/announced)" = 401 ] || { echo "no token was not rejected"; fail=1; }
+          [ "$(status "http://localhost:15448/announced?jwt=$OTHER_JWT")" = 401 ] || { echo "token from another key was not rejected"; fail=1; }
+          [ "$(status "http://localhost:15448/fetch/ci-auth.hang/catalog.json?jwt=$VIEWER_JWT")" = 200 ] || { echo "viewer token could not fetch the catalog"; fail=1; }
+
+          # A subscribe-only token must not be able to publish.
+          podman exec ci-auth sh -c "ffmpeg -hide_banner -v quiet -re -t 3 -i /media/input.mp4 -c copy \
+            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
+            timeout 5 moq --client-connect 'http://localhost:15448/?jwt=$VIEWER_JWT' --broadcast intruder.hang import fmp4" || true
+          if curl -sf "http://localhost:15448/announced?jwt=$VIEWER_JWT" | grep -q "intruder.hang"; then
+            echo "viewer token was able to publish"; fail=1
+          fi
+
+          [ "$fail" -ne 0 ] && podman logs ci-auth
+          podman rm -f ci-auth
+          exit "$fail"
+
   smoke-test-podman-ssai:
     needs: smoke-test-podman-build
     runs-on: ubuntu-latest

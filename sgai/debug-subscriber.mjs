@@ -16,6 +16,9 @@
 // Variable Substitution section; see lib/msf-uri.mjs). The fragment is
 // client-side only, so it rides along on --url without affecting the
 // connection itself.
+//
+// On a relay started with stream.sh --auth/--auth-key, put the viewer token
+// stream.sh prints in --url's query: "http://localhost:4443/?jwt=<token>#token=XYZ789".
 import * as Msf from "@moq/msf";
 import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced } from "./transport.mjs";
 import { SEGMENTATION_TYPE, SEGMENTATION_TYPE_NAMES } from "./event-timeline.mjs";

@@ -26,6 +26,33 @@ CSAI_BLACKOUT_LENGTH="${12:-10}"
 CSAI_BLACKOUT_ALT_UPID="${13:-}"
 AD="/media/ad.mp4"
 
+# Set by stream.sh --auth/--auth-key. With a key, the relay (HTTP API included) only
+# accepts JWTs signed with it; without one, it is public.
+JWT_QUERY=""
+if [ -n "${MOQ_LAB_AUTH_KEY:-}" ]; then
+    JWT_QUERY="?jwt=${MOQ_LAB_JWT:?MOQ_LAB_JWT is required with MOQ_LAB_AUTH_KEY}"
+fi
+RELAY_URL="http://localhost:${PORT}/${JWT_QUERY}"
+
+write_relay_config() {
+    local auth='public = ""'
+    if [ -n "${MOQ_LAB_AUTH_KEY:-}" ]; then
+        printf '%s' "$MOQ_LAB_AUTH_KEY" > /tmp/auth.jwk
+        auth='key = "/tmp/auth.jwk"'
+    fi
+    cat > /tmp/relay.toml <<EOF
+[server]
+listen = "[::]:${PORT}"
+tls.generate = ["localhost"]
+
+[web.http]
+listen = "[::]:${PORT}"
+
+[auth]
+${auth}
+EOF
+}
+
 # Shared 5-rendition x264 ladder (240p/360p/480p/720p/1080p): reused as-is by
 # the base pipeline, CSAI, and SSAI. Only the -map/-force_key_frames around it
 # differ per mode, so those are added at each call site.
@@ -49,18 +76,7 @@ ABR_LADDER_ENCODE_ARGS=(
 if [ "$CSAI" = true ]; then
     echo "Starting relay on https://localhost:$PORT (broadcast=$BROADCAST, abr-ladder=$ABR_LADDER, csai=true, ad-break-every=$AD_BREAK_EVERY, ad-break-length=$AD_BREAK_LENGTH, blackout-at=${CSAI_BLACKOUT_AT:-off})" >&2
 
-    cat > /tmp/relay.toml <<EOF
-[server]
-listen = "[::]:${PORT}"
-tls.generate = ["localhost"]
-
-[web.http]
-listen = "[::]:${PORT}"
-
-[auth]
-public = ""
-EOF
-
+    write_relay_config
     moq-relay /tmp/relay.toml &
     RELAY_PID=$!
 
@@ -72,7 +88,7 @@ EOF
     trap 'csai_cleanup; exit 0' INT TERM
 
     echo "Waiting for relay HTTP API..." >&2
-    until curl -sf "http://localhost:${PORT}/announced" > /dev/null 2>&1; do
+    until curl -sf "http://localhost:${PORT}/announced${JWT_QUERY}" > /dev/null 2>&1; do
         sleep 0.5
     done
     echo "Relay ready. Streaming '$BROADCAST' with a Break Start/End SCTE-35 track." >&2
@@ -94,7 +110,7 @@ EOF
         -f mpegts - |
         node /usr/local/bin/csai/ts-injector.mjs "$AD_BREAK_EVERY" "$AD_BREAK_LENGTH" \
             "$CSAI_BLACKOUT_AT" "$CSAI_BLACKOUT_LENGTH" "$CSAI_BLACKOUT_ALT_UPID" |
-        moq --client-connect "http://localhost:${PORT}" --broadcast "$BROADCAST" import ts
+        moq --client-connect "$RELAY_URL" --broadcast "$BROADCAST" import ts
 
     exit 0
 fi
@@ -135,18 +151,7 @@ fi
 
 echo "Starting relay on https://localhost:$PORT (broadcast=$BROADCAST, abr-ladder=$ABR_LADDER, ssai=$SSAI, sgai=$SGAI)" >&2
 
-cat > /tmp/relay.toml <<EOF
-[server]
-listen = "[::]:${PORT}"
-tls.generate = ["localhost"]
-
-[web.http]
-listen = "[::]:${PORT}"
-
-[auth]
-public = ""
-EOF
-
+write_relay_config
 moq-relay /tmp/relay.toml &
 RELAY_PID=$!
 
@@ -158,7 +163,7 @@ trap cleanup EXIT
 trap 'cleanup; exit 0' INT TERM
 
 echo "Waiting for relay HTTP API..." >&2
-until curl -sf "http://localhost:${PORT}/announced" > /dev/null 2>&1; do
+until curl -sf "http://localhost:${PORT}/announced${JWT_QUERY}" > /dev/null 2>&1; do
     sleep 0.5
 done
 echo "Relay ready. Streaming '$BROADCAST'." >&2
@@ -195,7 +200,7 @@ publish_content() {
     ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
         "${FFMPEG_ARGS[@]}" \
         -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
-        moq --client-connect "http://localhost:${PORT}" --broadcast "$broadcast" import fmp4
+        moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
 }
 
 if [ "$SSAI" = true ]; then
@@ -288,7 +293,7 @@ if [ "$SSAI" = true ]; then
             "${ENCODE_ARGS[@]}" \
             -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
             node /usr/local/bin/ssai/impression-tracker.mjs "$AD_BREAK_EVERY" "$AD_BREAK_LENGTH" |
-            moq --client-connect "http://localhost:${PORT}" --broadcast "$BROADCAST" import fmp4 || true
+            moq --client-connect "$RELAY_URL" --broadcast "$BROADCAST" import fmp4 || true
         echo "SSAI: pass complete, restarting..." >&2
     done
 elif [ "$SGAI" = true ]; then

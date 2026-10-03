@@ -12,6 +12,14 @@ any breaking changes worth flagging for the next person to bump.
 ## Unreleased
 
 ### Added
+- Optional JWT access control: `stream.sh --auth` (a new signing key for
+  each run) or `--auth-key FILE` (your own key, so tokens stay valid across
+  runs). The relay then refuses every connection and HTTP API call without a
+  token signed with the key. `stream.sh` prints a subscribe-only viewer
+  token (valid for 24 hours) and signs a publish token for its own
+  publishers. Keys and tokens are made with `moq token` inside the image.
+  Without these flags the stream stays public, as before. New CI job
+  `smoke-test-podman-auth`. See README, "Access control (JWT)".
 - README: "A note on SCTE 35-2" under section 6, documenting that this repo
   implements SCTE 35-1 only — SCTE 35-2 ("Event-Based Signaling") is its
   declared replacement, not implemented here because the spec is behind
