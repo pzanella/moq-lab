@@ -11,11 +11,15 @@ import { boxHeader, scanBoxes, parseMoov, parseMoofDecodeTime } from "../lib/fmp
 // fragments. Fetch the catalog once at startup to learn the video track's ID
 // and timescale, and which rendition name to subscribe to.
 export async function resolveVideoTiming(relayUrl, contentBroadcast, { timeoutMs = 5000 } = {}) {
+    // Keeps a `?jwt=` on relayUrl as the query, which string concatenation would break.
+    const base = new URL(relayUrl);
+    const catalogUrl = new URL(`/fetch/${contentBroadcast}/catalog.json`, base);
+    catalogUrl.search = base.search;
     // A relay's /fetch endpoint for a broadcast that never gets announced hangs
     // rather than 404ing (confirmed empirically) -- bound every attempt so a
     // caller retrying this in a loop can still notice a shutdown signal instead
     // of blocking on one unresolved request forever.
-    const res = await fetch(`${relayUrl}/fetch/${contentBroadcast}/catalog.json`, {
+    const res = await fetch(catalogUrl, {
         signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`catalog fetch failed: ${res.status}`);
