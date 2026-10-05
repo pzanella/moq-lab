@@ -34,6 +34,29 @@ if [ -n "${MOQ_LAB_AUTH_KEY:-}" ]; then
 fi
 RELAY_URL="http://localhost:${PORT}/${JWT_QUERY}"
 
+# Set by stream.sh --dashboard/--dashboard-port. Everything this script and its
+# children print is tee'd to a file the dashboard server tails for its log view,
+# and the pass-through proxies before `moq import` record an ingest clock for
+# its end-to-end latency readout (lib/ingest-clock.mjs).
+DASHBOARD_PORT="${MOQ_LAB_DASHBOARD_PORT:-}"
+if [ -n "$DASHBOARD_PORT" ]; then
+    DASHBOARD_LOG=/tmp/moq-lab.log
+    export MOQ_LAB_INGEST_CLOCK=/tmp/moq-lab-ingest.json
+    exec > >(tee -a "$DASHBOARD_LOG") 2> >(tee -a "$DASHBOARD_LOG" >&2)
+
+    if [ "$SSAI" = true ]; then DASHBOARD_MODE=ssai
+    elif [ "$CSAI" = true ]; then DASHBOARD_MODE=csai
+    elif [ "$SGAI" = true ]; then DASHBOARD_MODE=sgai
+    else DASHBOARD_MODE=base
+    fi
+    # Not in the cleanup traps below: it lives as long as the container, and the
+    # container's --init reaps it when this script exits.
+    node /usr/local/bin/dashboard/server/server.mjs \
+        --port "$DASHBOARD_PORT" --relay-port "$PORT" --broadcast "$BROADCAST" \
+        --mode "$DASHBOARD_MODE" --abr-ladder "$ABR_LADDER" \
+        --log-file "$DASHBOARD_LOG" --ingest-file "$MOQ_LAB_INGEST_CLOCK" &
+fi
+
 write_relay_config() {
     local auth='public = ""'
     if [ -n "${MOQ_LAB_AUTH_KEY:-}" ]; then
@@ -197,10 +220,20 @@ publish_content() {
         FFMPEG_ARGS=(-c copy)
     fi
 
-    ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
-        "${FFMPEG_ARGS[@]}" \
-        -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
-        moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
+    # The dashboard's ingest tap is a pure pass-through; it only sits in the pipe when
+    # the dashboard is on, so the default pipeline stays exactly ffmpeg | moq.
+    if [ -n "$DASHBOARD_PORT" ]; then
+        ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
+            "${FFMPEG_ARGS[@]}" \
+            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
+            node /usr/local/bin/dashboard/server/ingest-tap.mjs |
+            moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
+    else
+        ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
+            "${FFMPEG_ARGS[@]}" \
+            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
+            moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
+    fi
 }
 
 if [ "$SSAI" = true ]; then

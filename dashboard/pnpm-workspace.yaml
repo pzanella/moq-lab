@@ -1,0 +1,5 @@
+# Marks dashboard/ as its own pnpm project, separate from the repo root's
+# (which is the host-side sgai/ tooling). The Containerfile builds it from
+# this directory alone.
+packages:
+  - .

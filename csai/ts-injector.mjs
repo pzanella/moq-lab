@@ -23,6 +23,7 @@
 import { buildTimeSignalSection, buildProgramBlackoutOverrideSection, buildSpliceNullSection, crc32Mpeg2, SEGMENTATION_TYPE } from "./scte35.mjs";
 import { buildUri } from "../lib/msf-uri.mjs";
 import { createLogger } from "../lib/log.mjs";
+import { createIngestClock } from "../lib/ingest-clock.mjs";
 
 const log = createLogger("CSAI");
 
@@ -275,7 +276,10 @@ const startFired = new Set();
 let blackoutStartFired = false;
 let blackoutEndFired = false;
 
+const reportIngest = createIngestClock();
+
 function onVideoDecodeTime(pts) {
+    reportIngest(pts);
     // Detect a PTS reset (e.g. ffmpeg's -stream_loop wrapping back to the start).
     if (lastPts >= 0 && pts < lastPts - CYCLE_SECS) {
         ptsBase += Math.ceil(lastPts / CYCLE_SECS) * CYCLE_SECS;

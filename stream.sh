@@ -2,6 +2,7 @@
 # Usage: stream.sh [name] [--abr-ladder] [--port N] [--ssai-mode] [--ad-break-every N]
 #                   [--csai-mode] [--ad-break-length N]
 #                   [--sgai-mode] [--auth] [--auth-key FILE]
+#                   [--dashboard] [--dashboard-port N]
 #
 # --ad-break-every N   Seconds of content between ad breaks (default: 30). Shared by
 #                      --ssai-mode, --csai-mode, and --sgai-mode.
@@ -26,6 +27,9 @@
 #                      --auth-key, the stream is public.
 # --auth-key FILE      Like --auth, but sign with this key (a JWK file, e.g. from
 #                      `moq token generate`), so tokens stay valid across runs.
+# --dashboard          Also serve the real-time monitoring web UI (dashboard/) from the
+#                      container, on http://localhost:8080. See README.md "Dashboard".
+# --dashboard-port N   Like --dashboard, on port N instead of 8080.
 set -euo pipefail
 
 # Yellow only when stderr is an actual terminal -- keeps piped/redirected output
@@ -52,6 +56,8 @@ BLACKOUT_LENGTH=10
 PERSONALIZED_ADS=false
 AUTH=false
 AUTH_KEY_FILE=""
+DASHBOARD=false
+DASHBOARD_PORT=8080
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -67,6 +73,8 @@ while [ $# -gt 0 ]; do
         --personalized-ads) PERSONALIZED_ADS=true; shift ;;
         --auth) AUTH=true; shift ;;
         --auth-key) AUTH=true; AUTH_KEY_FILE="$2"; shift 2 ;;
+        --dashboard) DASHBOARD=true; shift ;;
+        --dashboard-port) DASHBOARD=true; DASHBOARD_PORT="$2"; shift 2 ;;
         *) NAME="$1"; shift ;;
     esac
 done
@@ -97,6 +105,11 @@ fi
 
 if [ -n "$AUTH_KEY_FILE" ] && [ ! -f "$AUTH_KEY_FILE" ]; then
     echo "--auth-key: $AUTH_KEY_FILE not found. Create one with: podman run --rm --entrypoint moq moq-lab token generate --out - > $AUTH_KEY_FILE" >&2
+    exit 1
+fi
+
+if [ "$DASHBOARD" = true ] && [ "$DASHBOARD_PORT" = "$PORT" ]; then
+    echo "--dashboard-port must differ from --port ($PORT): the relay already serves its HTTP API there." >&2
     exit 1
 fi
 
@@ -219,6 +232,14 @@ if [ "$AUTH" = true ]; then
     echo "Relay URL for the player: https://localhost:${PORT}/?jwt=$VIEWER_JWT" >&2
 fi
 
+# run-stream.sh starts the dashboard server only when it sees MOQ_LAB_DASHBOARD_PORT.
+DASHBOARD_ARGS=()
+if [ "$DASHBOARD" = true ]; then
+    DASHBOARD_ARGS=(-e "MOQ_LAB_DASHBOARD_PORT=$DASHBOARD_PORT" -p "$DASHBOARD_PORT:$DASHBOARD_PORT/tcp")
+    [ "$AUTH" = true ] && DASHBOARD_ARGS+=(-e "MOQ_LAB_VIEWER_JWT=$VIEWER_JWT")
+    echo "Dashboard: http://localhost:${DASHBOARD_PORT} (live once the container is up)" >&2
+fi
+
 CONTAINER_VOLUMES=(-v "$INPUT:/media/input.mp4:ro")
 if [ "$SSAI" = true ] || [ "$SGAI" = true ]; then
     CONTAINER_VOLUMES+=(-v "$AD_INPUT:/media/ad.mp4:ro")
@@ -226,7 +247,7 @@ fi
 
 if [ "$SGAI" = true ]; then
     podman run --name "$CONTAINER_NAME" --rm -d --init \
-        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
+        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" "$SGAI" "$AD_BROADCAST" \
         >/dev/null
@@ -273,7 +294,7 @@ else
     # "false" "" fill run-stream.sh's SGAI/AD_BROADCAST positions (unused here) so
     # BLACKOUT_AT/BLACKOUT_LENGTH land in its CSAI blackout positions after them.
     podman run --name "$CONTAINER_NAME" --rm -it --init \
-        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
+        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" \
         false "" "$BLACKOUT_AT" "$BLACKOUT_LENGTH"

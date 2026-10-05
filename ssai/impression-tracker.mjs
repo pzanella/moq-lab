@@ -5,7 +5,8 @@
 // Reads raw fMP4 from stdin, passes every byte unchanged to stdout,
 // and logs impression events when the stream PTS crosses ad quartile thresholds.
 import { createLogger } from "../lib/log.mjs";
-import { boxHeader, parseMoov, parseMoofDecodeTime } from "../lib/fmp4.mjs";
+import { FMP4Inspector } from "../lib/fmp4.mjs";
+import { createIngestClock } from "../lib/ingest-clock.mjs";
 
 const log = createLogger("SSAI");
 
@@ -27,81 +28,6 @@ const QUARTILES = [
     { event: "midpoint", pct: 0.5 },
     { event: "third_quartile", pct: 0.75 },
 ];
-
-// Parses moof/tfdt timestamps from the video track, on a private copy of the
-// data so stdout is never delayed.
-class FMP4Inspector {
-    constructor() {
-        this._buf = Buffer.alloc(0);
-        this._skipBytes = 0; // bytes left to discard for current mdat/ftyp/…
-        this._timescales = new Map(); // trackId → timescale
-        this._videoTrackId = null;
-        this.onVideoTimestamp = null; // (secs: number) => void
-    }
-
-    feed(chunk) {
-        if (this._skipBytes > 0) {
-            if (chunk.length <= this._skipBytes) {
-                this._skipBytes -= chunk.length;
-                return;
-            }
-            chunk = chunk.subarray(this._skipBytes);
-            this._skipBytes = 0;
-        }
-        this._buf = Buffer.concat([this._buf, chunk]);
-        this._parse();
-    }
-
-    _parse() {
-        while (this._buf.length >= 8) {
-            const hdr = boxHeader(this._buf, 0);
-            if (!hdr) break;
-            const { size, headerSize } = hdr;
-
-            const type = this._buf.subarray(4, 8).toString("ascii");
-            if (size < headerSize) {
-                this._buf = this._buf.subarray(headerSize);
-                continue;
-            }
-
-            // Skip large leaf boxes without buffering their bodies.
-            if (type === "mdat" || type === "ftyp" || type === "styp" || type === "free" || type === "skip") {
-                const bodySize = size - headerSize;
-                const have = this._buf.length - headerSize;
-                const eat = Math.min(bodySize, have);
-                this._buf = this._buf.subarray(headerSize + eat);
-                this._skipBytes = bodySize - eat;
-                continue;
-            }
-
-            if (this._buf.length < size) break; // wait for the full box
-
-            const body = this._buf.subarray(headerSize, size);
-            this._buf = this._buf.subarray(size);
-
-            if (type === "moov") this._onMoov(body);
-            else if (type === "moof") this._onMoof(body);
-        }
-    }
-
-    _onMoov(body) {
-        const { timescales, videoTrackId } = parseMoov(body);
-        for (const [trackId, timescale] of timescales) this._timescales.set(trackId, timescale);
-        if (videoTrackId !== null && this._videoTrackId === null) {
-            this._videoTrackId = videoTrackId;
-            log(`video track ${videoTrackId} timescale ${timescales.get(videoTrackId)}`);
-        }
-    }
-
-    _onMoof(body) {
-        if (this._videoTrackId === null) return;
-        const decodeTime = parseMoofDecodeTime(body, this._videoTrackId);
-        if (decodeTime !== null) {
-            const timescale = this._timescales.get(this._videoTrackId) ?? 90000;
-            this.onVideoTimestamp?.(decodeTime / timescale);
-        }
-    }
-}
 
 // Impression tracking — driven entirely by stream PTS, no timers.
 const fired = new Set();
@@ -148,8 +74,12 @@ function onVideoTimestamp(pts) {
     }
 }
 
-const inspector = new FMP4Inspector();
-inspector.onVideoTimestamp = onVideoTimestamp;
+const reportIngest = createIngestClock();
+const inspector = new FMP4Inspector({ onVideoTrack: (trackId, timescale) => log(`video track ${trackId} timescale ${timescale}`) });
+inspector.onVideoTimestamp = (pts) => {
+    reportIngest(pts);
+    onVideoTimestamp(pts);
+};
 
 log(`adBreakEvery=${AD_BREAK_EVERY} adBreakLength=${AD_BREAK_LENGTH}`);
 

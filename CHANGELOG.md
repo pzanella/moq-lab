@@ -12,6 +12,18 @@ any breaking changes worth flagging for the next person to bump.
 ## Unreleased
 
 ### Added
+- Optional real-time monitoring dashboard: `stream.sh --dashboard` (or
+  `--dashboard-port N`, default `8080`) serves a web UI from the container.
+  It shows connection state, RTT, packet loss, jitter, bitrate, resolution,
+  frame rate, end-to-end latency, codecs, and a live view of the container's
+  logs. The page measures its own MoQ session to the relay (WebTransport
+  stats, the relay's `PROBE` RTT, frame timing). For end-to-end latency, the
+  proxies before `moq import` record an ingest clock (`lib/ingest-clock.mjs`,
+  and the new `dashboard/server/ingest-tap.mjs` for the base/SGAI pipeline).
+  New `dashboard/` folder (React, Vite, Tailwind CSS, Chart.js; pinned
+  `@moq/net` 0.3.5, same as the root), built in its own `Containerfile`
+  stage. Without the flag, the pipeline is unchanged. New CI job
+  `smoke-test-podman-dashboard`. See README, section 9.
 - Optional JWT access control: `stream.sh --auth` (a new signing key for
   each run) or `--auth-key FILE` (your own key, so tokens stay valid across
   runs). The relay then refuses every connection and HTTP API call without a
@@ -26,6 +38,11 @@ any breaking changes worth flagging for the next person to bump.
   SCTE's member paywall. Tracked as a known gap (see GitHub issue).
 
 ### Changed
+- `ssai/impression-tracker.mjs`'s fMP4 parser moved to `lib/fmp4.mjs`
+  (`FMP4Inspector`) so the dashboard's ingest tap can share it. No behavior
+  change.
+- CI's `.mjs` syntax check now skips every `node_modules/`, not only the
+  root one (`dashboard/` has its own).
 - Replaced Docker with Podman as the container runtime, everywhere: renamed
   `Dockerfile` → `Containerfile` and `.dockerignore` → `.containerignore`,
   switched every `docker` invocation in `stream.sh`,
