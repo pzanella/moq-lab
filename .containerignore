@@ -1,8 +1,11 @@
 # Keeps the build context small: only Containerfile, run-stream.sh, lib/, ssai/,
-# and csai/ actually get COPYed into the image (see Containerfile). Everything
-# else here is either host-only (sgai/, stream.sh) or not needed at all in
-# the image (assets, docs, the host Node project's own install artifacts).
+# csai/, and dashboard/ (sources, built in their own stage) actually get COPYed
+# into the image (see Containerfile). Everything else here is either host-only
+# (sgai/, stream.sh) or not needed at all in the image (assets, docs, the host
+# Node project's own install artifacts, a local dashboard build).
 node_modules/
+dashboard/node_modules/
+dashboard/dist/
 sgai/
 assets/
 patches/

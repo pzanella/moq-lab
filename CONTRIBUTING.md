@@ -38,7 +38,10 @@ Try the sandbox before changing it, so you have a baseline to compare against:
 
 See [README.md](README.md#project-layout) for the full breakdown of what runs
 inside Podman (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
-(`stream.sh`, `sgai/`).
+(`stream.sh`, `sgai/`). `dashboard/` is the exception to the no-build-step
+rule below: it's a React + Vite app with its own `package.json`, built in
+its own `Containerfile` stage. Its container-side half
+(`dashboard/server/`) is plain `.mjs` like everything else.
 
 ## Making changes
 
@@ -55,7 +58,8 @@ inside Podman (`run-stream.sh`, `lib/`, `ssai/`, `csai/`) versus on the host
   intentionally minimal (`@moq/net`, `@moq/msf`, `ws`, `zod`). If a change
   needs a new package, explain why in the PR description.
 - **Bump pinned versions together.** `moq-cli`/`moq-relay` (`Containerfile`) and
-  `@moq/net`/`@moq/msf` (`package.json`) are pinned on purpose. They move
+  `@moq/net`/`@moq/msf` (`package.json`, and `@moq/net` again in
+  `dashboard/package.json`) are pinned on purpose. They move
   fast and have shipped breaking changes between minor versions before —
   bump both sides deliberately and re-run the smoke tests, not just
   `npm outdated`. The `moq-relay` version is set in two places: the
@@ -79,7 +83,7 @@ Podman, so no real content broadcast — the Media Timeline needs one, see
 below). `smoke-test-podman-build` builds the actual sandbox image and the
 synthetic test clip once, sharing both via artifacts with one job per
 pipeline mode (`smoke-test-podman-base`, `-auth`, `-ssai`, `-ssai-abr`,
-`-csai`, `-sgai`) — split out so each mode gets its own pass/fail check instead of
+`-csai`, `-sgai`, `-dashboard`) — split out so each mode gets its own pass/fail check instead of
 one job with five sequential steps, and a failure in one doesn't block the
 others from reporting. Together they check the relay's HTTP API (broadcast
 announced, catalog shape, SCTE-35 track present, real Media Timeline entries
@@ -99,7 +103,7 @@ that the stream looks right. Before opening a PR:
 
    ```bash
    shellcheck stream.sh run-stream.sh
-   find . -path ./node_modules -prune -o -name '*.mjs' -print | xargs -n1 node --check
+   find . -name node_modules -prune -o -name '*.mjs' -print | xargs -n1 node --check
    ```
 
 ### `*.ci-check.mjs` scripts
