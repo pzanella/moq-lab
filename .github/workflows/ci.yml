@@ -26,7 +26,7 @@ jobs:
 
       - name: Check .mjs syntax
         run: |
-          find . -path ./node_modules -prune -o -name '*.mjs' -print \
+          find . -name node_modules -prune -o -name '*.mjs' -print \
             | xargs -n1 node --check
 
   # Runs the real SGAI signaling pipeline (ad-decisioning-publisher.mjs +
@@ -244,6 +244,69 @@ jobs:
             }
           "
           podman rm -f ci-base
+
+  # Same base pipeline with the dashboard on (stream.sh --dashboard): the ingest
+  # tap sits in the pipe, so check the broadcast still comes through, then that
+  # the server serves the built UI, its config, and an event stream carrying
+  # both container logs and ingest-clock samples.
+  smoke-test-podman-dashboard:
+    needs: smoke-test-podman-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
+
+      - name: Smoke test -- dashboard
+        run: |
+          podman run -d --name ci-dashboard --init \
+            -e MOQ_LAB_DASHBOARD_PORT=18080 -p 18080:18080/tcp \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -p 15443:15443/udp -p 15443:15443/tcp \
+            moq-lab /media/input.mp4 ci-test.hang false 15443 false 30 false 6
+
+          ok=false
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:15443/announced 2>/dev/null | grep -q "ci-test.hang"; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "broadcast never announced through the ingest tap"; podman logs ci-dashboard; exit 1
+          fi
+
+          curl -sf http://localhost:18080/api/config -o /tmp/dashboard-config.json
+          node -e "
+            const c = JSON.parse(require('fs').readFileSync('/tmp/dashboard-config.json'));
+            if (c.broadcast !== 'ci-test.hang' || c.relayPort !== 15443 || c.mode !== 'base') {
+              throw new Error('unexpected /api/config: ' + JSON.stringify(c));
+            }
+          "
+
+          curl -sf http://localhost:18080/ -o /tmp/dashboard-index.html
+          grep -q '<div id="root">' /tmp/dashboard-index.html
+          asset=$(grep -o '/assets/[^"]*\.js' /tmp/dashboard-index.html | head -1)
+          curl -sf "http://localhost:18080${asset}" -o /dev/null
+
+          # curl -m exits 28 on its timeout, which is how an endless SSE stream ends here.
+          curl -sN -m 5 http://localhost:18080/api/events -o /tmp/dashboard-events.txt || [ $? -eq 28 ]
+          grep -q '^event: log' /tmp/dashboard-events.txt || { echo "no log events"; cat /tmp/dashboard-events.txt; exit 1; }
+          grep -q '^event: ingest' /tmp/dashboard-events.txt || { echo "no ingest-clock events"; cat /tmp/dashboard-events.txt; exit 1; }
+          podman rm -f ci-dashboard
 
   # Same base pipeline, with the relay started the way stream.sh --auth starts it:
   # only connections carrying a JWT signed with the key are accepted.

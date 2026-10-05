@@ -26,6 +26,17 @@ RUN set -eux; \
     curl -fsSL "https://github.com/moq-dev/moq/releases/download/moq-relay-v${MOQ_RELAY_VERSION}/moq-relay-${MOQ_RELAY_VERSION}-${ARCH}-unknown-linux-gnu.tar.gz" \
         | tar xz -C /usr/local/bin --strip-components=2 "moq-relay-${MOQ_RELAY_VERSION}-${ARCH}-unknown-linux-gnu/bin/moq-relay"
 
+# Builds the dashboard web UI (dashboard/) to static files. Only dist/ reaches the
+# runtime image -- Vite, React, and node_modules stay in this stage. Its layers are
+# cached, so this only re-runs when something under dashboard/ changes.
+FROM node:24-slim AS dashboard
+
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/pnpm-lock.yaml dashboard/pnpm-workspace.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile
+COPY dashboard/ ./
+RUN pnpm build
+
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -38,6 +49,8 @@ COPY run-stream.sh /usr/local/bin/run-stream.sh
 COPY lib/ /usr/local/bin/lib/
 COPY ssai/ /usr/local/bin/ssai/
 COPY csai/ /usr/local/bin/csai/
+COPY dashboard/server/ /usr/local/bin/dashboard/server/
+COPY --from=dashboard /dashboard/dist/ /usr/local/bin/dashboard/dist/
 RUN chmod +x /usr/local/bin/run-stream.sh
 
 ENTRYPOINT ["run-stream.sh"]

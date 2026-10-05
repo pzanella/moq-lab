@@ -22,9 +22,10 @@ This repo is **self-contained**: it has no dependency on anything outside it
 8. [CSAI: SCTE-35 signaling](#6-csai-scte-35-signaling)
 9. [SGAI: Event Timeline signaling](#7-sgai-event-timeline-signaling)
 10. [Relay HTTP API](#8-relay-http-api)
-11. [Troubleshooting](#9-troubleshooting)
-12. [Contributing](#contributing)
-13. [Acknowledgments](#acknowledgments)
+11. [Dashboard: real-time monitoring](#9-dashboard-real-time-monitoring)
+12. [Troubleshooting](#10-troubleshooting)
+13. [Contributing](#contributing)
+14. [Acknowledgments](#acknowledgments)
 
 ---
 
@@ -41,7 +42,8 @@ moq-lab/
 ├── lib/                   ← shared helpers (logger, CLI arg parsing, fMP4 box parsing, MOQ URLs)
 ├── ssai/                  ← Server-Side Ad Insertion (in-container proxy)
 ├── csai/                  ← CSAI SCTE-35 signaling (in-container proxy)
-└── sgai/                  ← Server-Guided Ad Insertion (host-side publisher)
+├── sgai/                  ← Server-Guided Ad Insertion (host-side publisher)
+└── dashboard/             ← optional monitoring web UI (React + Vite), built into the image
 ```
 
 `ssai/` and `csai/` run **inside** the Podman image (copied in by the
@@ -49,6 +51,11 @@ moq-lab/
 **your host**, outside Podman, and is the only part of this sandbox with
 external dependencies (`@moq/net`, `@moq/msf`, `ws`, `zod` — installed via
 this repo's own `package.json`).
+
+`dashboard/` is its own pnpm project with its own `package.json`. You never
+need to install it yourself: the `Containerfile` builds it in a separate
+stage, and only the static output plus a small dependency-free Node server
+end up in the image. See [section 9](#9-dashboard-real-time-monitoring).
 
 ---
 
@@ -289,6 +296,8 @@ podman run --rm -i --entrypoint moq moq-lab token sign --key - --subscribe "" \
 | `--personalized-ads` | off | SGAI only: template ad upids with a `%token%` placeholder |
 | `--auth` | off | Only accept connections with a JWT; a new key is made for this run |
 | `--auth-key FILE` | off | Like `--auth`, but sign with the key in `FILE` |
+| `--dashboard` | off | Serve the real-time monitoring web UI on `http://localhost:8080` |
+| `--dashboard-port N` | `8080` | Like `--dashboard`, on port `N` (must differ from `--port`) |
 
 ### npm/pnpm shortcut
 
@@ -764,7 +773,173 @@ curl "http://localhost:4443/announced?jwt=<viewer token>"
 
 ---
 
-## 9. Troubleshooting
+## 9. Dashboard: real-time monitoring
+
+`--dashboard` serves a web page from the same container as the stream. It
+shows live transport and media metrics for the broadcast, plus the
+container's own logs. It works with every mode and flag above.
+
+### Step by step
+
+1. Start any stream with `--dashboard`:
+
+   ```bash
+   ./stream.sh bbb --dashboard
+   ```
+
+   `stream.sh` prints the address before the container starts:
+
+   ```
+   Dashboard: http://localhost:8080 (live once the container is up)
+   ```
+
+2. Open `http://localhost:8080` in a browser. Use a Chromium-based browser
+   (Chrome, Edge) for the full set of metrics; see "Where the numbers come
+   from" below. There is no certificate warning to click through.
+
+3. The status badge goes from **Connecting** to **Waiting for broadcast** to
+   **Live** within a few seconds. Metrics start filling in on the next video
+   group (about 2 seconds).
+
+4. Press `Ctrl+C` in the terminal to stop the stream. The dashboard stops
+   with the container.
+
+Use another port if 8080 is taken:
+
+```bash
+./stream.sh bbb --abr-ladder --dashboard-port 9000
+```
+
+With `--auth` or `--auth-key`, the dashboard gets the subscribe-only viewer
+token from `stream.sh` and uses it for you.
+
+### What you see
+
+- **Transport & QUIC:** connection state, RTT, packet loss, jitter, and the
+  received bitrate, with charts of bitrate and RTT over the last 2 minutes.
+- **Media stream:** resolution, frame rate, end-to-end latency, and codecs,
+  with charts of latency and frame rate. On an `--abr-ladder` stream, a
+  **Rendition** selector switches which rung the dashboard subscribes to
+  (it starts on the highest).
+- **Container logs:** everything `run-stream.sh` and the processes it starts
+  print (relay, `moq`, SSAI/CSAI proxies), live. Scroll up to pause,
+  **Follow** to resume, and type in **Filter** to show matching lines only.
+
+Every value has a green (**Healthy**), amber (**Warning**), or red
+(**Critical**) status. The status is always shown as text too, not only as
+a color.
+
+### Where the numbers come from
+
+The page is a real MoQ subscriber: it opens its own WebTransport session to
+the relay, as a player would, and measures that session. Nothing is
+simulated.
+
+| Metric | Source |
+|---|---|
+| Connection | The session itself: transport (WebTransport, or the WebSocket fallback) and the negotiated protocol version |
+| RTT | The browser's QUIC RTT if it reports one; otherwise the RTT the relay measures and sends over the MoQ `PROBE` stream |
+| Packet loss | WebTransport `getStats()`: packets *this browser sent* that QUIC declared lost. Shows "—" when the browser has no `getStats()` |
+| Jitter | RFC 3550 inter-arrival jitter over the video frames |
+| Bitrate | QUIC bytes received if the browser reports them; otherwise the MoQ payload bytes the page read |
+| Resolution, codecs | The broadcast's catalog |
+| Frame rate | Video frames received per second. The nominal rate comes from the frame timestamps |
+| End-to-end latency | See below |
+
+**End-to-end latency** is the time from when a frame was due at the source
+until it arrives in the browser. The source is `ffmpeg -re`, which reads the
+file at wall-clock pace. A small tap sits just before `moq import`. For SSAI
+and CSAI that's the existing proxies; for the base and SGAI pipelines it's
+`dashboard/server/ingest-tap.mjs`. The tap records that pace, and the browser
+compares it with each frame's arrival time. The browser also corrects for
+the clock difference between your machine and the container: on macOS, the
+podman VM's clock can be hundreds of milliseconds off. The figure includes
+muxer buffering, `moq import`, the relay, and the network. It does not
+include decoding or rendering.
+
+Some patterns are expected:
+
+- The base pipeline sits around 300 ms. ffmpeg's mp4 muxer hands frames over
+  in bursts of about half a second.
+- An `--abr-ladder` encode that is too heavy for your CPU or podman VM shows
+  up as a latency that keeps growing and a frame rate below the nominal one.
+  The stream really is falling behind live; the dashboard just makes it
+  visible.
+
+### How it fits together
+
+```
+browser ──WebTransport (UDP 4443)──▶ moq-relay           (metrics: the page's own MoQ session)
+browser ──HTTP (TCP 8080)──────────▶ dashboard/server    (UI, config, logs, ingest clock)
+
+inside the container, when --dashboard is on:
+  run-stream.sh output ──tee──▶ /tmp/moq-lab.log ──▶ server ──SSE──▶ log view
+  ffmpeg ─▶ tap/proxy ─▶ moq import   (the tap writes /tmp/moq-lab-ingest.json)
+```
+
+- `stream.sh --dashboard` passes `MOQ_LAB_DASHBOARD_PORT` (and, with auth,
+  `MOQ_LAB_VIEWER_JWT`) into the container and publishes the port.
+- When `run-stream.sh` sees that variable, it tees its output to a log file,
+  starts `dashboard/server/server.mjs`, and puts the ingest tap in the pipe.
+  Without `--dashboard`, none of this runs: the pipeline is exactly what it
+  was before.
+- The server has no npm dependencies, the same as `ssai/` and `csai/`. It
+  serves the built UI and three endpoints: `/api/config`, `/api/time` (for
+  the clock correction), and `/api/events` (Server-Sent Events with log lines
+  and ingest-clock samples).
+
+The `Containerfile` builds the UI in its own stage, so Vite, React, and
+`node_modules` never reach the runtime image:
+
+```dockerfile
+FROM node:24-slim AS dashboard
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/pnpm-lock.yaml dashboard/pnpm-workspace.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile
+COPY dashboard/ ./
+RUN pnpm build
+
+FROM debian:bookworm-slim
+# ...
+COPY dashboard/server/ /usr/local/bin/dashboard/server/
+COPY --from=dashboard /dashboard/dist/ /usr/local/bin/dashboard/dist/
+```
+
+The UI is always built into the image. `--dashboard` only decides whether it
+is served.
+
+### Working on the UI
+
+Stack: React, Vite, Tailwind CSS, and Chart.js. There is no icon library:
+states are text labels and colored dots. To get hot reload against a live
+stream, without rebuilding the image:
+
+```bash
+./stream.sh bbb --dashboard            # terminal 1: a stream and its dashboard server
+cd dashboard
+pnpm install                           # once; needs Node.js ^20.19 or >=22.12
+pnpm dev                               # terminal 2: http://localhost:5173
+```
+
+`pnpm dev` sends `/api` requests to the dashboard server on port 8080. Set
+`DASHBOARD_API=http://localhost:9000` if you used `--dashboard-port 9000`.
+Changes to the UI reach `./stream.sh --dashboard` the next time the image
+builds, which `stream.sh` does on every run.
+
+### Limitations
+
+- With `--sgai-mode`, the Ad Decisioning Publisher runs on your host, not
+  in the container. Its logs stay in your terminal, not in the dashboard's
+  log view.
+- Browsers differ in what WebTransport reports. Packet loss and the
+  QUIC-level bitrate need `getStats()`; without it they show "—" or fall back
+  to the payload bitrate. The tile says which source it is using. RTT falls
+  back to the relay's `PROBE` estimate.
+- Each open dashboard tab is one more subscriber on the relay.
+
+---
+
+## 10. Troubleshooting
 
 **"Podman is not ready"**
 `stream.sh` tries to set up the `podman machine` for you on macOS on first
@@ -809,12 +984,22 @@ yourself first — `sgai/*.mjs` depends on `@moq/net`, `@moq/msf`, `ws`, and
 Another process is using port 4443. Pass a different port with `--port N`,
 and update the player's `moq.url` to match.
 
+**The dashboard page doesn't load, or shows "Could not reach the dashboard server"**
+Check that you passed `--dashboard` and that the port isn't already in use
+on your machine (`--dashboard-port N` picks another one). The server logs
+`[dashboard] ... serving on port N` when it starts. If the page loads but
+stays on **Connecting**, the browser can't reach the relay on UDP/TCP
+`--port`: check that nothing else holds that port.
+
 **The first build takes too long**
 `moq` and `moq-relay` are downloaded as prebuilt binaries, not compiled, so
 this should only take a few seconds beyond the base image pull. If a build is
 taking minutes, check your network connection to GitHub releases rather than
 assuming a source compile is happening. Subsequent builds use Podman's
 layer cache and are faster still. To force a fresh build: `podman rmi moq-lab`.
+The first build also pulls `node:24-slim` and installs the dashboard's UI
+dependencies (about a minute). After that, this step re-runs only when
+something under `dashboard/` changes.
 
 ---
 
