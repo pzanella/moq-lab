@@ -245,6 +245,98 @@ jobs:
           "
           podman rm -f ci-base
 
+  # Same base pipeline fed from a URL (stream.sh --source) instead of a mounted
+  # file: a two-variant HLS ladder and a DASH manifest, served from the runner
+  # itself, plus a URL that doesn't exist. --network host lets the container
+  # reach the runner's HTTP server on 127.0.0.1.
+  smoke-test-podman-source:
+    needs: smoke-test-podman-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
+
+      - name: Serve a synthetic HLS ladder and DASH manifest
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+          mkdir -p /tmp/www/hls /tmp/www/dash
+          # 60s, so the on-demand source (played once) is still live while it's checked.
+          ffmpeg -hide_banner -v error \
+            -f lavfi -i "testsrc=size=320x240:rate=15:duration=60" \
+            -f lavfi -i "sine=frequency=1000:duration=60" \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 15 \
+            -c:a aac -shortest /tmp/source.mp4
+          ffmpeg -hide_banner -v error -i /tmp/source.mp4 \
+            -filter_complex "[0:v]split=2[hi][lo0];[lo0]scale=160:120[lo]" \
+            -map "[hi]" -map 0:a -map "[lo]" -map 0:a \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 15 -c:a aac \
+            -f hls -hls_time 2 -hls_playlist_type vod -var_stream_map "v:0,a:0 v:1,a:1" \
+            -master_pl_name master.m3u8 /tmp/www/hls/v%v.m3u8
+          ffmpeg -hide_banner -v error -i /tmp/source.mp4 -c copy -f dash /tmp/www/dash/manifest.mpd
+          nohup python3 -m http.server 8000 --directory /tmp/www > /tmp/http.log 2>&1 &
+
+      - name: Smoke test -- HLS and DASH sources
+        run: |
+          check_source() {
+            local name="$1" url="$2" format="$3"
+            podman run -d --name "ci-$name" --init --network host \
+              moq-lab "$url" "ci-$name.hang" false 15443 false 30 false 6
+
+            ok=false
+            for _ in $(seq 1 30); do
+              if curl -sf http://localhost:15443/announced 2>/dev/null | grep -q "ci-$name.hang"; then
+                ok=true; break
+              fi
+              sleep 1
+            done
+            if [ "$ok" != true ]; then
+              echo "$name broadcast never announced"; podman logs "ci-$name"; exit 1
+            fi
+            podman logs "ci-$name" 2>&1 | grep -q "Source: $format" || {
+              echo "no 'Source: $format' log line"; podman logs "ci-$name"; exit 1
+            }
+
+            # The HLS ladder's 160x120 variant must not be the one picked.
+            curl -sf "http://localhost:15443/fetch/ci-$name.hang/catalog.json" -o "/tmp/$name-catalog.json"
+            node -e "
+              const c = JSON.parse(require('fs').readFileSync('/tmp/$name-catalog.json'));
+              const v = Object.values(c.video?.renditions ?? {});
+              if (v.length !== 1 || v[0].codedWidth !== 320) {
+                throw new Error('expected one 320x240 video rendition: ' + JSON.stringify(c));
+              }
+              if (Object.keys(c.audio?.renditions ?? {}).length === 0) {
+                throw new Error('no audio rendition in catalog: ' + JSON.stringify(c));
+              }
+            "
+            podman rm -f "ci-$name"
+          }
+
+          check_source hls http://127.0.0.1:8000/hls/master.m3u8 hls
+          check_source dash http://127.0.0.1:8000/dash/manifest.mpd dash
+
+      - name: Smoke test -- unreachable source fails fast
+        run: |
+          set +e
+          podman run --rm --network host moq-lab http://127.0.0.1:8000/missing.m3u8 \
+            ci-missing.hang false 15443 false 30 false 6 > /tmp/missing.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/missing.log
+          [ "$status" -ne 0 ] || { echo "expected a non-zero exit"; exit 1; }
+          grep -q "cannot read the source" /tmp/missing.log
+          if grep -q "Starting relay" /tmp/missing.log; then
+            echo "relay started for an unreachable source"; exit 1
+          fi
+
   # Same base pipeline with the dashboard on (stream.sh --dashboard): the ingest
   # tap sits in the pipe, so check the broadcast still comes through, then that
   # the server serves the built UI, its config, and an event stream carrying

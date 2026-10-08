@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Usage: stream.sh [name] [--abr-ladder] [--port N] [--ssai-mode] [--ad-break-every N]
+# Usage: stream.sh [name] [--source URL] [--abr-ladder] [--port N] [--ssai-mode] [--ad-break-every N]
 #                   [--csai-mode] [--ad-break-length N]
 #                   [--sgai-mode] [--auth] [--auth-key FILE]
 #                   [--dashboard] [--dashboard-port N]
 #
+# --source URL         Stream from an http(s) URL -- an MP4 file, an HLS playlist
+#                      (.m3u8), or a DASH manifest (.mpd), on demand or live --
+#                      instead of assets/<name>.mp4. <name> then only names the
+#                      broadcast (default: live). Not available with --ssai-mode.
+#                      See README.md "Stream from a URL".
 # --ad-break-every N   Seconds of content between ad breaks (default: 30). Shared by
 #                      --ssai-mode, --csai-mode, and --sgai-mode.
 # --ad-break-length N  CSAI only: seconds between the Break Start and Break End SCTE-35
@@ -43,6 +48,8 @@ warn() {
 }
 
 NAME="bbb"
+NAME_SET=false
+SOURCE=""
 ABR_LADDER=false
 PORT=4443
 SSAI=false
@@ -75,7 +82,8 @@ while [ $# -gt 0 ]; do
         --auth-key) AUTH=true; AUTH_KEY_FILE="$2"; shift 2 ;;
         --dashboard) DASHBOARD=true; shift ;;
         --dashboard-port) DASHBOARD=true; DASHBOARD_PORT="$2"; shift 2 ;;
-        *) NAME="$1"; shift ;;
+        --source) SOURCE="$2"; shift 2 ;;
+        *) NAME="$1"; NAME_SET=true; shift ;;
     esac
 done
 
@@ -86,6 +94,27 @@ MODES_ON=0
 if [ "$MODES_ON" -gt 1 ]; then
     echo "--ssai-mode, --csai-mode, and --sgai-mode are mutually exclusive (different pipelines)." >&2
     exit 1
+fi
+
+# Only http(s): ffmpeg would otherwise also accept file://, pipes, and other
+# protocols here. run-stream.sh checks the URL is readable before streaming.
+if [ -n "$SOURCE" ]; then
+    if ! [[ "$SOURCE" =~ ^https?://[^[:space:]]+$ ]]; then
+        echo "--source: expected an http:// or https:// URL, got '$SOURCE'." >&2
+        exit 1
+    fi
+    # Never valid in a URL, but zsh's paste handling adds them before ? = & ~ *
+    # (and they survive inside quotes). Sent as-is, they break signed URLs
+    # (a 403 from the CDN), so name the real problem instead.
+    if [[ "$SOURCE" == *\\* ]]; then
+        echo "--source: the URL contains backslashes (\\), which your shell probably added when pasting it. Remove them, and wrap the URL in single quotes: --source 'https://...'" >&2
+        exit 1
+    fi
+    if [ "$SSAI" = true ]; then
+        echo "--source can't be combined with --ssai-mode: SSAI cuts the content at fixed offsets, which needs a local file (assets/<name>.mp4)." >&2
+        exit 1
+    fi
+    [ "$NAME_SET" = true ] || NAME="live"
 fi
 
 # --ad-break-length only drives CSAI's Break Start/End cue spacing. SSAI and SGAI always
@@ -120,8 +149,8 @@ MOQ_DIR="$(cd "$(dirname "$0")" && pwd)"
 INPUT="$MOQ_DIR/assets/$NAME.mp4"
 AD_INPUT="$MOQ_DIR/assets/ad.mp4"
 
-if [ ! -f "$INPUT" ]; then
-    echo "Missing $INPUT. Put a test clip at assets/$NAME.mp4 and try again." >&2
+if [ -z "$SOURCE" ] && [ ! -f "$INPUT" ]; then
+    echo "Missing $INPUT. Put a test clip at assets/$NAME.mp4 (or pass --source URL) and try again." >&2
     exit 1
 fi
 
@@ -240,16 +269,23 @@ if [ "$DASHBOARD" = true ]; then
     echo "Dashboard: http://localhost:${DASHBOARD_PORT} (live once the container is up)" >&2
 fi
 
-CONTAINER_VOLUMES=(-v "$INPUT:/media/input.mp4:ro")
+# run-stream.sh's first argument: the mounted local file, or the --source URL as-is.
+CONTAINER_VOLUMES=()
+if [ -n "$SOURCE" ]; then
+    CONTAINER_INPUT="$SOURCE"
+else
+    CONTAINER_INPUT=/media/input.mp4
+    CONTAINER_VOLUMES+=(-v "$INPUT:/media/input.mp4:ro")
+fi
 if [ "$SSAI" = true ] || [ "$SGAI" = true ]; then
     CONTAINER_VOLUMES+=(-v "$AD_INPUT:/media/ad.mp4:ro")
 fi
 
 if [ "$SGAI" = true ]; then
     podman run --name "$CONTAINER_NAME" --rm -d --init \
-        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
+        ${CONTAINER_VOLUMES[@]+"${CONTAINER_VOLUMES[@]}"} ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
-        "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" "$SGAI" "$AD_BROADCAST" \
+        "$IMAGE" "$CONTAINER_INPUT" "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" "$SGAI" "$AD_BROADCAST" \
         >/dev/null
     CONTAINER_LOG="/tmp/moq-lab-$$.log"
     podman logs -f "$CONTAINER_NAME" > >(tee "$CONTAINER_LOG" >&2) 2>&1 &
@@ -294,8 +330,8 @@ else
     # "false" "" fill run-stream.sh's SGAI/AD_BROADCAST positions (unused here) so
     # BLACKOUT_AT/BLACKOUT_LENGTH land in its CSAI blackout positions after them.
     podman run --name "$CONTAINER_NAME" --rm -it --init \
-        "${CONTAINER_VOLUMES[@]}" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
+        ${CONTAINER_VOLUMES[@]+"${CONTAINER_VOLUMES[@]}"} ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
-        "$IMAGE" /media/input.mp4 "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" \
+        "$IMAGE" "$CONTAINER_INPUT" "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" \
         false "" "$BLACKOUT_AT" "$BLACKOUT_LENGTH"
 fi
