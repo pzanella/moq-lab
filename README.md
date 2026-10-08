@@ -39,7 +39,7 @@ moq-lab/
 ├── package.json           ← host-side Node deps, used only by sgai/
 ├── pnpm-workspace.yaml    ← marks this repo as its own pnpm project
 ├── assets/                ← your local test videos (gitignored)
-├── lib/                   ← shared helpers (logger, CLI arg parsing, fMP4 box parsing, MOQ URLs)
+├── lib/                   ← shared helpers (logger, CLI arg parsing, fMP4 box parsing, MOQ URLs, --source probing)
 ├── ssai/                  ← Server-Side Ad Insertion (in-container proxy)
 ├── csai/                  ← CSAI SCTE-35 signaling (in-container proxy)
 ├── sgai/                  ← Server-Guided Ad Insertion (host-side publisher)
@@ -79,6 +79,10 @@ This sandbox has two independent dimensions, which you combine with flags:
 
 That's 2 × 4 (no ad mode, SSAI, CSAI, SGAI) = 8 runnable combinations, all
 described below.
+
+The content comes from a file, `assets/<name>.mp4`, or from a URL with
+`--source` (an MP4, HLS, or DASH stream; see [Stream from a
+URL](#stream-from-a-url-mp4-hls-dash)).
 
 **SSAI** (`--ssai-mode`, Server-Side Ad Insertion) splices real ad video into
 the content stream server-side, in a continuous loop, as one already-stitched
@@ -148,6 +152,9 @@ content, so the source file can have different encoding parameters.
 `assets/*.mp4` is gitignored (see `assets/.gitignore`), so your videos stay
 local.
 
+No local file? You can also stream straight from a URL — an MP4, HLS, or DASH
+stream. See [Stream from a URL](#stream-from-a-url-mp4-hls-dash).
+
 ---
 
 ## 3. Run it
@@ -169,6 +176,63 @@ All commands below are run from the repo root.
 # Custom port
 ./stream.sh bbb --port 4444
 ```
+
+### Stream from a URL (MP4, HLS, DASH)
+
+Instead of a file in `assets/`, pass `--source URL` to publish an existing
+stream over MoQ. The URL can point to:
+
+- an **MP4** file over HTTP(S),
+- an **HLS** playlist (`.m3u8`), on demand or live,
+- a **DASH** manifest (`.mpd`), on demand or live.
+
+```bash
+# HLS (the broadcast is called live.hang)
+./stream.sh --source https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+
+# DASH, with your own broadcast name (bbb.hang)
+./stream.sh bbb --source https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd
+
+# An MP4 file, as a 5-rendition ABR ladder
+./stream.sh trailer --source https://media.w3.org/2010/05/sintel/trailer.mp4 --abr-ladder
+```
+
+With `--source`, `<name>` only names the broadcast (`<name>.hang`). It
+defaults to `live`. No file in `assets/` is needed.
+
+How it works:
+
+- Before the relay starts, the container reads the URL with `ffprobe`
+  (`lib/probe-source.mjs`). If the URL can't be read, or has no video and
+  audio, the run stops with the reason:
+
+  ```
+  cannot read the source: https://example.com/live.m3u8: Server returned 404 Not Found
+  ```
+
+- HLS and DASH streams often have several variants (a ladder). Only one is
+  published: the one with the **highest resolution**, with its own audio
+  track. ffmpeg only downloads that variant. Add `--abr-ladder` to make the
+  usual 5 renditions from it.
+- **H.264 video with AAC audio is copied as-is.** Anything else (for example
+  HEVC or AC-3) is re-encoded to H.264/AAC, so every browser can play it.
+- The startup log shows what was picked:
+
+  ```
+  Source: hls (on demand, 634.6s); video stream #9 (h264), audio stream #8 (aac)
+  ```
+
+- **The source plays once.** A live stream goes on until you press `Ctrl+C`.
+  An on-demand stream (MP4, HLS, or DASH VOD) ends the run when it ends
+  (`Source ended.`) — unlike a local file, it isn't looped.
+- Only `http://` and `https://` URLs are accepted, and ffmpeg may only use
+  network protocols (`http`, `https`, `tcp`, `tls`, `crypto` for AES-128
+  HLS). A playlist can't make it read a local file. If a request to the
+  source gets no answer for 15 seconds, the run ends.
+
+`--source` works with `--abr-ladder`, `--csai-mode`, `--sgai-mode`, `--auth`,
+and `--dashboard`. It doesn't work with `--ssai-mode`: SSAI cuts the content
+into parts at fixed times, which needs a local file.
 
 ### SSAI: Server-Side Ad Insertion
 
@@ -283,7 +347,8 @@ podman run --rm -i --entrypoint moq moq-lab token sign --key - --subscribe "" \
 
 | Flag | Default | Description |
 |---|---|---|
-| `<name>` | `bbb` | Content file to stream (`assets/<name>.mp4`) |
+| `<name>` | `bbb` | Content file to stream (`assets/<name>.mp4`). With `--source`, only the broadcast name (default `live`) |
+| `--source URL` | off | Stream from an MP4, HLS, or DASH URL instead of `assets/<name>.mp4`. Not with `--ssai-mode` |
 | `--abr-ladder` | off | Encode a 5-rendition ABR ladder instead of a single stream |
 | `--port N` | `4443` | Port for both the QUIC relay and the HTTP API |
 | `--ssai-mode` | off | Interleave `assets/ad.mp4` as a recurring, server-stitched ad break |
@@ -953,6 +1018,37 @@ The content file is not where the script expects it. Check that the file is
 in `assets/` and that the name matches what you typed on the command line (no
 `.mp4` extension in the command).
 
+**"cannot read the source: ..." (with `--source`)**
+The container couldn't read the URL. The rest of the message is ffmpeg's
+reason, for example `Server returned 404 Not Found` (wrong URL), `no answer
+within 60s` (the server is too slow or blocks the request), or `Invalid data
+found` (not an MP4, HLS, or DASH stream). The URL is read from inside the
+container, so `localhost` there is the container itself, not your machine.
+
+Some HLS streams fail with `detected format eac3 extension eac3 mismatches
+allowed extensions`. The ffmpeg version in the image (Debian bookworm, 5.1)
+refuses segment files with an `.ec3` extension, for example in Apple's
+`bipbop` examples. Use another stream.
+
+**"the URL contains backslashes" (with `--source`)**
+When you paste a URL, zsh can add a `\` before `?`, `=`, `&`, `~`, and `*`.
+Inside quotes, the `\` stays in the URL. On a signed URL (a CDN token like
+`?hdnts=...`), this makes the server answer `403 Forbidden`. Remove the
+backslashes and put the URL in single quotes:
+
+```bash
+./stream.sh --source 'https://example.com/master.m3u8?token=abc&x=1'
+```
+
+**"has no variant with both a video and an audio track" (with `--source`)**
+The stream has no audio, or no video. `--source` needs both, like a file in
+`assets/`.
+
+**The stream stops after a while (with `--source`)**
+An on-demand source plays once, then the run ends with `Source ended.`. A
+live source ends the run when the server ends the stream, or when a request
+gets no answer for 15 seconds; ffmpeg's reason is printed just before.
+
 **"Ad normalization failed; falling back to content-only stream"**
 The ad file (`assets/ad.mp4`) exists but `ffmpeg` could not transcode it.
 Check that it is a valid MP4 file with at least one video and one audio
@@ -968,6 +1064,13 @@ The request has no token, or the token is wrong. Check that the URL has
 `?jwt=<token>` and that the token is the one `stream.sh` printed in **this**
 run: with `--auth`, every run makes a new key, so old tokens stop working.
 Viewer tokens also expire after 24 hours. A viewer token can't publish.
+
+**`connection closed err=authentication is disabled` in the log (without `--auth`)**
+The player connects with a token (`?jwt=...` in its URL, often left over from
+an earlier `--auth` run), but this run's relay is public. A public relay
+refuses every request that carries a token. The player keeps reconnecting,
+so the line repeats. Remove `?jwt=...` from the player's URL, or start the
+stream with `--auth`/`--auth-key` and use the URL that `stream.sh` prints.
 
 **The stream freezes at the ad→content transition (SSAI)**
 This can happen if the ad file has a very different frame rate or resolution

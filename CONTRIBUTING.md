@@ -32,6 +32,7 @@ Try the sandbox before changing it, so you have a baseline to compare against:
 ./stream.sh bbb --ssai-mode        # requires assets/ad.mp4
 ./stream.sh bbb --csai-mode
 ./stream.sh bbb --sgai-mode        # requires assets/ad.mp4; pnpm install runs automatically
+./stream.sh --source https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8   # HLS from a URL
 ```
 
 ## Project layout
