@@ -57,6 +57,61 @@ if [ -n "$DASHBOARD_PORT" ]; then
         --log-file "$DASHBOARD_LOG" --ingest-file "$MOQ_LAB_INGEST_CLOCK" &
 fi
 
+# Set by stream.sh --source: $INPUT is then an http(s) URL to an MP4, HLS, or
+# DASH stream instead of the mounted /media/input.mp4. ffmpeg reads all three
+# natively; lib/probe-source.mjs checks the URL is readable before the relay
+# starts, and picks the streams to publish. A local file has one video and one
+# audio stream, so the defaults below keep its pipelines exactly as they were.
+FFMPEG_SOURCE_ARGS=(-v quiet -stream_loop -1)
+SOURCE_OPTS=()
+SOURCE_V="v:0"
+SOURCE_A="a:0"
+COPY_ARGS=(-c copy)
+FMP4_COPY_ARGS=()
+case "$INPUT" in
+    http://*|https://*)
+        if [ "$SSAI" = true ]; then
+            echo "--ssai-mode needs a local file: it cuts the content at fixed offsets, which a live or remote source can't guarantee." >&2
+            exit 1
+        fi
+        echo "Probing source $INPUT..." >&2
+        PROBE=$(node /usr/local/bin/lib/probe-source.mjs "$INPUT") || exit 1
+        read -r SOURCE_V V_CODEC SOURCE_A A_CODEC SOURCE_FORMAT SOURCE_DURATION <<< "$PROBE"
+        if [ "$SOURCE_DURATION" = live ]; then SOURCE_KIND=live; else SOURCE_KIND="on demand, ${SOURCE_DURATION}s"; fi
+        echo "Source: $SOURCE_FORMAT ($SOURCE_KIND); video stream #$SOURCE_V ($V_CODEC), audio stream #$SOURCE_A ($A_CODEC)" >&2
+
+        # Played once, not looped: ffmpeg can't seek an HLS stream back to its
+        # start, so a looped VOD would stop there anyway. A live source never
+        # ends; when a VOD one does, so does this run. Errors stay visible: unlike
+        # a local file, a remote source can fail mid-run.
+        FFMPEG_SOURCE_ARGS=(-v error)
+
+        # Keep the whitelist in sync with lib/probe-source.mjs. -rw_timeout (in
+        # microseconds) ends the run when a request to the source gets no answer,
+        # instead of hanging.
+        SOURCE_OPTS=(-protocol_whitelist "http,https,tcp,tls,crypto" -rw_timeout 15000000)
+        # An HLS/DASH ladder carries every variant; mapping only the picked streams
+        # also keeps ffmpeg from downloading the variants it doesn't use.
+        COPY_ARGS=(-map "0:$SOURCE_V" -map "0:$SOURCE_A")
+        # Every browser decodes H.264/AAC, so that's copied as-is; anything else
+        # (HEVC, AC-3, ...) is re-encoded to it.
+        if [ "$V_CODEC" = h264 ] && [ "$A_CODEC" = aac ]; then
+            COPY_ARGS+=(-c copy)
+            # HLS over MPEG-TS carries AAC in ADTS framing, which the fMP4 muxer
+            # refuses; aac_adtstoasc unwraps it, and leaves AAC that's already
+            # MP4-framed (e.g. from DASH) untouched. fMP4 output only: CSAI's
+            # MPEG-TS output wants ADTS as it is.
+            FMP4_COPY_ARGS=(-bsf:a aac_adtstoasc)
+        else
+            echo "Source is not H.264/AAC: re-encoding it to H.264/AAC." >&2
+            COPY_ARGS+=(
+                -c:v libx264 -preset veryfast -g 50 -keyint_min 50 -sc_threshold 0 -pix_fmt yuv420p
+                -c:a aac -profile:a aac_low -b:a 128k
+            )
+        fi
+        ;;
+esac
+
 write_relay_config() {
     local auth='public = ""'
     if [ -n "${MOQ_LAB_AUTH_KEY:-}" ]; then
@@ -79,7 +134,7 @@ EOF
 # Shared 5-rendition x264 ladder (240p/360p/480p/720p/1080p): reused as-is by
 # the base pipeline, CSAI, and SSAI. Only the -map/-force_key_frames around it
 # differ per mode, so those are added at each call site.
-ABR_LADDER_FILTER_COMPLEX="[0:v]split=5[v0][v1][v2][v3][v4];[v0]scale=-2:240[v240];[v1]scale=-2:360[v360];[v2]scale=-2:480[v480];[v3]scale=-2:720[v720];[v4]scale=-2:1080[v1080]"
+ABR_LADDER_FILTER_COMPLEX="[0:${SOURCE_V}]split=5[v0][v1][v2][v3][v4];[v0]scale=-2:240[v240];[v1]scale=-2:360[v360];[v2]scale=-2:480[v480];[v3]scale=-2:720[v720];[v4]scale=-2:1080[v1080]"
 ABR_LADDER_ENCODE_ARGS=(
     -preset veryfast -g 50 -keyint_min 50 -sc_threshold 0
     -c:v:0 libx264 -profile:v:0 high -level:v:0 3.0 -pix_fmt:v:0 yuv420p -b:v:0 400k
@@ -121,20 +176,21 @@ if [ "$CSAI" = true ]; then
     if [ "$ABR_LADDER" = true ]; then
         CSAI_FFMPEG_ARGS=(
             -filter_complex "$ABR_LADDER_FILTER_COMPLEX"
-            -map "[v240]" -map "[v360]" -map "[v480]" -map "[v720]" -map "[v1080]" -map 0:a:0
+            -map "[v240]" -map "[v360]" -map "[v480]" -map "[v720]" -map "[v1080]" -map "0:$SOURCE_A"
             "${ABR_LADDER_ENCODE_ARGS[@]}"
         )
     else
-        CSAI_FFMPEG_ARGS=(-c copy)
+        CSAI_FFMPEG_ARGS=("${COPY_ARGS[@]}")
     fi
 
-    ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
+    ffmpeg -hide_banner "${FFMPEG_SOURCE_ARGS[@]}" -re "${SOURCE_OPTS[@]}" -i "$INPUT" \
         "${CSAI_FFMPEG_ARGS[@]}" \
         -f mpegts - |
         node /usr/local/bin/csai/ts-injector.mjs "$AD_BREAK_EVERY" "$AD_BREAK_LENGTH" \
             "$CSAI_BLACKOUT_AT" "$CSAI_BLACKOUT_LENGTH" "$CSAI_BLACKOUT_ALT_UPID" |
         moq --client-connect "$RELAY_URL" --broadcast "$BROADCAST" import ts
 
+    echo "Source ended." >&2
     exit 0
 fi
 
@@ -153,14 +209,16 @@ fi
 NORM_AD=/tmp/ad_normalized.mp4
 PREP_PID=""
 if [ "$SSAI" = true ] || [ "$SGAI" = true ]; then
-    V_SIZE=$(ffprobe -v error -select_streams v:0 \
-        -show_entries stream=width,height -of csv=s=x:p=0 "$INPUT")
-    V_FPS=$(ffprobe -v error -select_streams v:0 \
-        -show_entries stream=avg_frame_rate -of csv=p=0 "$INPUT")
-    A_RATE=$(ffprobe -v error -select_streams a:0 \
-        -show_entries stream=sample_rate -of csv=p=0 "$INPUT")
-    A_CH=$(ffprobe -v error -select_streams a:0 \
-        -show_entries stream=channels -of csv=p=0 "$INPUT")
+    # Usage: probe_stream STREAM ENTRIES FORMAT. Keeps the first non-empty line:
+    # an HLS ladder (--source) lists each stream again under its program.
+    probe_stream() {
+        ffprobe -v error "${SOURCE_OPTS[@]}" -select_streams "$1" \
+            -show_entries "stream=$2" -of "$3" "$INPUT" | awk 'NF && !seen++'
+    }
+    V_SIZE=$(probe_stream "$SOURCE_V" width,height csv=s=x:p=0)
+    V_FPS=$(probe_stream "$SOURCE_V" avg_frame_rate csv=p=0)
+    A_RATE=$(probe_stream "$SOURCE_A" sample_rate csv=p=0)
+    A_CH=$(probe_stream "$SOURCE_A" channels csv=p=0)
 
     echo "SSAI: normalizing ad to content profile (${V_SIZE} @ ${V_FPS} fps, ${A_RATE} Hz ${A_CH}ch)..." >&2
     ffmpeg -hide_banner -v quiet \
@@ -213,23 +271,23 @@ publish_content() {
     if [ "$ABR_LADDER" = true ]; then
         FFMPEG_ARGS=(
             -filter_complex "$ABR_LADDER_FILTER_COMPLEX"
-            -map "[v240]" -map "[v360]" -map "[v480]" -map "[v720]" -map "[v1080]" -map 0:a:0
+            -map "[v240]" -map "[v360]" -map "[v480]" -map "[v720]" -map "[v1080]" -map "0:$SOURCE_A"
             "${ABR_LADDER_ENCODE_ARGS[@]}"
         )
     else
-        FFMPEG_ARGS=(-c copy)
+        FFMPEG_ARGS=("${COPY_ARGS[@]}" "${FMP4_COPY_ARGS[@]}")
     fi
 
     # The dashboard's ingest tap is a pure pass-through; it only sits in the pipe when
     # the dashboard is on, so the default pipeline stays exactly ffmpeg | moq.
     if [ -n "$DASHBOARD_PORT" ]; then
-        ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
+        ffmpeg -hide_banner "${FFMPEG_SOURCE_ARGS[@]}" -re "${SOURCE_OPTS[@]}" -i "$INPUT" \
             "${FFMPEG_ARGS[@]}" \
             -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
             node /usr/local/bin/dashboard/server/ingest-tap.mjs |
             moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
     else
-        ffmpeg -hide_banner -v quiet -stream_loop -1 -re -i "$INPUT" \
+        ffmpeg -hide_banner "${FFMPEG_SOURCE_ARGS[@]}" -re "${SOURCE_OPTS[@]}" -i "$INPUT" \
             "${FFMPEG_ARGS[@]}" \
             -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
             moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
@@ -342,3 +400,5 @@ elif [ "$SGAI" = true ]; then
 else
     publish_content "$BROADCAST"
 fi
+# Only reachable with --source: a local file loops forever.
+echo "Source ended." >&2

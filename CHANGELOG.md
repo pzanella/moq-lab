@@ -12,6 +12,18 @@ any breaking changes worth flagging for the next person to bump.
 ## Unreleased
 
 ### Added
+- Optional remote source: `stream.sh --source URL` publishes an MP4 file,
+  an HLS playlist, or a DASH manifest (on demand or live) over MoQ, instead
+  of `assets/<name>.mp4`. `<name>` then only names the broadcast (default
+  `live`). Before the relay starts, the new `lib/probe-source.mjs` reads the
+  URL with `ffprobe` and stops the run with the reason if it can't. From an
+  HLS/DASH ladder it picks the highest-resolution variant and its audio.
+  H.264/AAC is copied, anything else is re-encoded to H.264/AAC. Only
+  `http(s)` URLs are accepted, and ffmpeg may only use network protocols. A
+  remote source plays once (no loop). Works with `--abr-ladder`,
+  `--csai-mode`, `--sgai-mode`, `--auth`, and `--dashboard`; not with
+  `--ssai-mode`. Without the flag, the pipeline is unchanged. New CI job
+  `smoke-test-podman-source`. See README, "Stream from a URL".
 - Optional real-time monitoring dashboard: `stream.sh --dashboard` (or
   `--dashboard-port N`, default `8080`) serves a web UI from the container.
   It shows connection state, RTT, packet loss, jitter, bitrate, resolution,
