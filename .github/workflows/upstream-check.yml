@@ -1,0 +1,55 @@
+name: Upstream check
+
+# Reports new moq-relay, moq-cli, @moq/net, and @moq/msf releases in one issue.
+# Dependabot ignores @moq/* on purpose (see .github/dependabot.yml): these move
+# together, by hand, with the smoke tests.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  ISSUE_TITLE: "Upstream MoQ updates available"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Compare pinned versions with the latest releases
+        id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if .github/scripts/upstream-check.sh > /tmp/report.md; then
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "behind=true" >> "$GITHUB_OUTPUT"
+          fi
+          cat /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open, update, or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEHIND: ${{ steps.report.outputs.behind }}
+        run: |
+          number=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
+          if [ "$BEHIND" = true ]; then
+            if [ -n "$number" ]; then
+              gh issue edit "$number" --body-file /tmp/report.md
+            else
+              gh issue create --title "$ISSUE_TITLE" --body-file /tmp/report.md --label enhancement
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" --comment "All pinned MoQ versions are up to date."
+          fi

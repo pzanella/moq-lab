@@ -29,6 +29,22 @@ jobs:
           find . -name node_modules -prune -o -name '*.mjs' -print \
             | xargs -n1 node --check
 
+      # CONTRIBUTING.md, "Bump pinned versions together": the same version must
+      # be pinned everywhere it appears.
+      - name: Check pinned versions match
+        run: |
+          fail=0
+          relay=$(sed -n 's/^ARG MOQ_RELAY_VERSION=//p' Containerfile)
+          if [ "$relay" != "$MOQ_RELAY_VERSION" ]; then
+            echo "moq-relay: Containerfile has $relay, ci.yml has $MOQ_RELAY_VERSION"; fail=1
+          fi
+          root=$(node -p "require('./package.json').dependencies['@moq/net']")
+          dashboard=$(node -p "require('./dashboard/package.json').dependencies['@moq/net']")
+          if [ "$root" != "$dashboard" ]; then
+            echo "@moq/net: package.json has $root, dashboard/package.json has $dashboard"; fail=1
+          fi
+          exit "$fail"
+
   # Runs the real SGAI signaling pipeline (ad-decisioning-publisher.mjs +
   # debug-subscriber.mjs) against a live relay, no Podman needed -- this is what
   # would have caught ad-decisioning-publisher.mjs being accidentally deleted.

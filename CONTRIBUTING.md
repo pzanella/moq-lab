@@ -66,7 +66,14 @@ its own `Containerfile` stage. Its container-side half
   `npm outdated`. The `moq-relay` version is set in two places: the
   `Containerfile` and `MOQ_RELAY_VERSION` at the top of
   `.github/workflows/ci.yml`. Change both, so CI tests the same relay that
-  the sandbox uses.
+  the sandbox uses. CI's `lint` job fails if these copies don't match.
+
+  You don't need to watch upstream yourself. Every Monday,
+  `.github/workflows/upstream-check.yml` compares these pins with the newest
+  releases and opens (or updates) an issue called "Upstream MoQ updates
+  available" when one is behind. It closes the issue again once all pins are
+  up to date. Dependabot (`.github/dependabot.yml`) opens weekly PRs for the
+  GitHub Actions and the other npm packages. It skips `@moq/*` on purpose.
 - **Update README.md in the same PR.** Behavior changes (new flags, new
   broadcast names, changed defaults) must be reflected in the relevant
   section — this repo has no separate docs site, the README is the docs.
