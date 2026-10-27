@@ -9,8 +9,9 @@
 //   Jitter       RFC 3550 inter-arrival jitter over the video track's frame timestamps
 //   Bitrate      WebTransport bytesReceived, else the MoQ payload bytes this page read
 //   FPS          video frames received per second (and the nominal rate from timestamps)
-//   E2E latency  arrival time minus when lib/ingest-clock.mjs says that media time
-//                was due at the source, corrected for host/container clock skew
+//   E2E latency  arrival time minus the frame's wall-clock time from the catalog's
+//                `clock`, plus lib/ingest-clock.mjs's startLagMs, corrected for
+//                host/container clock skew
 import * as Moq from "@moq/net";
 
 // hang's catalog track name (the ".json" suffix is hang's convention, not MSF's).
@@ -19,10 +20,8 @@ const TICK_MS = 1000;
 const RECONNECT_MS = 2000;
 export const HISTORY_SECONDS = 120;
 
-// A frame can't be newer than what the publisher-side tap has already seen
-// (allowing for its write interval). One that is belongs to a publisher run
-// that restarted (e.g. each SSAI pass) since the last ingest sample.
-const INGEST_MAX_AHEAD_SECS = 2;
+// hang's catalog `clock.wall` counts from this epoch, not the Unix one.
+const MOQ_EPOCH_MS = Date.UTC(2020, 0, 1);
 
 function median(values) {
     if (values.length === 0) return null;
@@ -60,7 +59,7 @@ export class StreamMonitor {
     #relayUrl;
     #broadcast;
     #onSnapshot;
-    #ingest = null; // latest { mediaSecs, wallMs } from the dashboard server
+    #ingest = null; // latest { startLagMs } from the dashboard server
     #clockOffsetMs = 0; // container clock minus this browser's clock
     #abort = new AbortController();
 
@@ -284,11 +283,14 @@ export class StreamMonitor {
             this.#prevTransit = transit;
         }
 
+        // The catalog's clock gives the wall-clock time `moq import` assigned to this
+        // timestamp. startLagMs moves it back to when the frame was due at the source
+        // (see lib/ingest-clock.mjs).
+        const clock = this.#catalog?.clock;
         const ingest = this.#ingest;
-        if (ingest && mediaSecs <= ingest.mediaSecs + INGEST_MAX_AHEAD_SECS) {
-            // The sample pins media time to the source's wall-clock pace (see
-            // lib/ingest-clock.mjs), so any frame of the same run maps exactly.
-            const dueWall = ingest.wallMs + (mediaSecs - ingest.mediaSecs) * 1000;
+        if (clock && ingest) {
+            const clockWallMs = MOQ_EPOCH_MS + clock.wall / ((clock.timescale ?? 1_000_000) / 1000);
+            const dueWall = clockWallMs + mediaSecs * 1000 - ingest.startLagMs;
             this.#latencies.push(arrivalWall + this.#clockOffsetMs - dueWall);
         }
     }

@@ -403,6 +403,9 @@ jobs:
           curl -sN -m 5 http://localhost:18080/api/events -o /tmp/dashboard-events.txt || [ $? -eq 28 ]
           grep -q '^event: log' /tmp/dashboard-events.txt || { echo "no log events"; cat /tmp/dashboard-events.txt; exit 1; }
           grep -q '^event: ingest' /tmp/dashboard-events.txt || { echo "no ingest-clock events"; cat /tmp/dashboard-events.txt; exit 1; }
+          grep -q '"startLagMs":' /tmp/dashboard-events.txt || { echo "ingest-clock events have no startLagMs"; cat /tmp/dashboard-events.txt; exit 1; }
+          # The latency readout maps frame timestamps with the catalog's clock.
+          curl -sf http://localhost:15443/fetch/ci-test.hang/catalog.json | grep -q '"clock":' || { echo "catalog has no clock"; exit 1; }
           podman rm -f ci-dashboard
 
   # Same base pipeline, with the relay started the way stream.sh --auth starts it:

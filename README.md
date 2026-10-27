@@ -928,8 +928,15 @@ simulated.
 until it arrives in the browser. The source is `ffmpeg -re`, which reads the
 file at wall-clock pace. A small tap sits just before `moq import`. For SSAI
 and CSAI that's the existing proxies; for the base and SGAI pipelines it's
-`dashboard/server/ingest-tap.mjs`. The tap records that pace, and the browser
-compares it with each frame's arrival time. The browser also corrects for
+`dashboard/server/ingest-tap.mjs`.
+
+`moq import` does not keep the source's timestamps. It gives the first frame
+the time it arrived, and the catalog's `clock` field turns every timestamp
+into a wall-clock time. If the first frame arrived late (ffmpeg's muxer
+holds back about half a second at the start), every later frame looks early
+by the same amount. The tap measures this delay (`startLagMs`) from the
+source's pace, and the browser adds it back when it compares each frame's
+wall-clock time with its arrival time. The browser also corrects for
 the clock difference between your machine and the container: on macOS, the
 podman VM's clock can be hundreds of milliseconds off. The figure includes
 muxer buffering, `moq import`, the relay, and the network. It does not

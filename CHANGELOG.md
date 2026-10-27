@@ -67,6 +67,13 @@ any breaking changes worth flagging for the next person to bump.
     `-frag_duration 1000`, which also gives one fragment per sample.
   - A public relay refuses a request that carries a token with
     `the auth server refused the session` (README, Troubleshooting).
+  - Dashboard end-to-end latency: `moq import` no longer keeps the source's
+    timestamps. It gives the first frame the time it arrived, and the
+    catalog's new `clock` field maps every timestamp to a wall-clock time.
+    The dashboard now uses that clock. `lib/ingest-clock.mjs` no longer
+    sends media/wall pairs: it sends `startLagMs`, how late the first frame
+    reached `moq import` compared with the source's pace, and the browser
+    adds it back. Without this the latency stayed at "Waiting for data".
 
   Tested end to end in Podman: base, ABR ladder, SSAI, CSAI (CUEI
   descriptor, blackout), SGAI (no lost events, Media Timeline, per-break ad
