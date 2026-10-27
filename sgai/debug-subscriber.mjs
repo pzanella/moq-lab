@@ -87,9 +87,15 @@ while (!stopping) {
             }
         })().catch((err) => log(`mediatime track error: ${err.message ?? err}`));
 
+        // The publisher writes one group per ad-break cycle, one frame per event. Read each
+        // group to its end: readJson() would drop an older group as soon as a newer one
+        // exists, and lose the events still on the way in it.
+        let group;
         while (!stopping) {
-            const record = await eventsTrack.readJson();
+            const record = group ? await group.readJson() : undefined;
             if (record === undefined) {
+                group = await eventsTrack.recvGroup();
+                if (group) continue;
                 log("track closed by publisher, exiting");
                 stopping = true;
                 break;

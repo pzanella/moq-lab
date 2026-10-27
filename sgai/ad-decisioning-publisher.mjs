@@ -184,7 +184,7 @@ const mediaTimeTracks = [];
             const producer = request.accept();
             producer.writeFrame({ payload: catalogBytes, timestamp: Moq.Time.Timestamp.now() });
         } else if (request.name === "events") {
-            eventsTracks.push(request.accept());
+            addEventsTrack(request.accept());
         } else if (request.name === "mediatime") {
             mediaTimeTracks.push(request.accept());
         } else {
@@ -193,27 +193,44 @@ const mediaTimeTracks = [];
     }
 })();
 
-// Every event is its own single-frame group, and two groups appended in the same tick race
-// each other to the subscriber: the older one can arrive late or be skipped entirely. Events
-// can coincide from independent sources (the blackout timer vs. the ad-break loop, or an
-// ANNOUNCE wait that runs up to the end of its break), so instead of staggering each call
-// site, every write goes through one queue that keeps EMIT_GAP_MS between consecutive
-// groups. The queue also preserves call order, which adStart -> placementOpportunityStart
-// relies on (see the ad-break loop below).
-const EMIT_GAP_MS = 50;
-let emitQueue = Promise.resolve();
+// One group per ad-break cycle, and each event is one frame in it. A group is one QUIC
+// stream, so its frames arrive complete and in order. With one group per event, two events
+// written close together were two groups, and a subscriber that already had the newer one
+// dropped the older one if its frame had not arrived yet (@moq/net's readFrame() skips older
+// groups). This also keeps adStart before placementOpportunityStart (see the ad-break loop).
+//
+// cycleEvents holds the events of the current cycle, so a subscriber that joins in the
+// middle of a cycle first gets what it missed, for example the Ad Start of a break that
+// is already running.
+//
+// The next group opens at the first event of the next cycle, not when the cycle starts:
+// the last events of a cycle then have adBreakEvery seconds to arrive before a newer
+// group exists.
+let eventsCycle = 0;
+let cycleEvents = [];
 
-function emit(record) {
-    emitQueue = emitQueue.then(async () => {
-        writeEvent(record);
-        await new Promise((resolve) => setTimeout(resolve, EMIT_GAP_MS));
-    });
+function addEventsTrack(track) {
+    const entry = { track, cycle: eventsCycle, group: track.appendGroup() };
+    for (const record of cycleEvents) entry.group.writeJson(record);
+    eventsTracks.push(entry);
 }
 
-function writeEvent(record) {
+function startEventsCycle(cycle) {
+    eventsCycle = cycle;
+    cycleEvents = [];
+}
+
+function emit(record) {
+    cycleEvents.push(record);
     for (let i = eventsTracks.length - 1; i >= 0; i--) {
+        const entry = eventsTracks[i];
         try {
-            eventsTracks[i].writeJson(record);
+            if (entry.cycle !== eventsCycle) {
+                entry.group.close();
+                entry.group = entry.track.appendGroup();
+                entry.cycle = eventsCycle;
+            }
+            entry.group.writeJson(record);
         } catch {
             // Subscriber disconnected; drop it rather than let it break future emits.
             eventsTracks.splice(i, 1);
@@ -340,6 +357,7 @@ while (running) {
     const breakEndMs = breakStartMs + adBreakLength * 1000;
 
     const cycleAdBroadcastName = cycleAdBroadcast(cycle);
+    startEventsCycle(cycle);
 
     await sleepUntil(breakStartMs);
     if (!running) break;
@@ -371,7 +389,8 @@ while (running) {
     // expected to treat this pair as one atomic trigger, acting on whichever record arrives
     // first -- but only adStart carries segmentation_upid_uri (the per-cycle broadcast name to
     // fetch), so if placementOpportunityStart won the race, the subscriber would act with no
-    // broadcast name to resolve. emit()'s queue keeps them in this order with a gap between.
+    // broadcast name to resolve. Both are frames in the same group (see emit()), so they
+    // arrive in this order.
     emit(adStart(breakStartMs, adEventId, adUpidUri(cycle)));
     emit(placementOpportunityStart(breakStartMs, poEventId));
 

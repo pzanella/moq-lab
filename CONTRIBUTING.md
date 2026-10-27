@@ -81,7 +81,8 @@ CI runs a set of smoke tests end to end on every push/PR (see
 `ad-decisioning-publisher.mjs` against a real relay and checks the Event
 Timeline, blackout, and `%token%` templating a subscriber receives (no
 Podman, so no real content broadcast — the Media Timeline needs one, see
-below). `smoke-test-podman-build` builds the actual sandbox image and the
+below). It also checks that no event is lost between the publisher and the
+subscriber (`sgai/event-delivery.ci-check.mjs`). `smoke-test-podman-build` builds the actual sandbox image and the
 synthetic test clip once, sharing both via artifacts with one job per
 pipeline mode (`smoke-test-podman-base`, `-auth`, `-ssai`, `-ssai-abr`,
 `-csai`, `-sgai`, `-dashboard`) — split out so each mode gets its own pass/fail check instead of
@@ -112,7 +113,8 @@ that the stream looks right. Before opening a PR:
 A few checks are too involved for an inline `run:` step in
 `ci.yml` (byte-level comparisons, ordering/timing assertions across a live
 container's logs) and live as standalone scripts instead — e.g.
-`csai/scte35.ci-check.mjs`, `ssai/impression-tracker.ci-check.mjs`. They're
+`csai/scte35.ci-check.mjs`, `ssai/impression-tracker.ci-check.mjs`,
+`sgai/event-delivery.ci-check.mjs`. They're
 test-only: nothing in `Containerfile` or `run-stream.sh` imports them, they
 exist purely to be invoked from a CI step. The `*.ci-check.mjs` suffix marks
 that at a glance; they live next to the module they check rather than in a
