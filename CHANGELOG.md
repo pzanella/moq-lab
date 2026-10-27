@@ -12,6 +12,17 @@ any breaking changes worth flagging for the next person to bump.
 ## Unreleased
 
 ### Added
+- Dashboard **Player** card: plays the stream with `@moq/watch` 0.6.6 in
+  every mode. With `--sgai-mode` it is the SGAI player that was missing: it
+  reads the Event Timeline (`dashboard/src/lib/sgai.js`) and switches from
+  the content broadcast to the ad broadcast named in `Ad Start` on
+  `Placement Opportunity Start`, and back on `Placement Opportunity End`. A
+  `Program Blackout Override` covers the picture. It shows the latest events
+  and how long each switch took (event to first frame drawn). Every switch
+  mounts a new `<moq-watch>`: changing `name` on one element reused its
+  video pipeline, and the first frames of the new broadcast failed to decode
+  (`EncodingError`), because content and ad share the track name `0.m4s`.
+  `/api/config` now also returns `eventsBroadcast` in SGAI mode.
 - Upstream tracking. `.github/workflows/upstream-check.yml` runs every
   Monday (or by hand): it compares the pinned `moq-relay`, `moq-cli`,
   `@moq/net`, and `@moq/msf` with the newest releases

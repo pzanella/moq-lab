@@ -31,6 +31,9 @@ const CONFIG = {
     relayPort: Number(args["relay-port"] ?? 4443),
     mode: args.mode ?? "base",
     abrLadder: args["abr-ladder"] === "true",
+    // SGAI's Event Timeline broadcast. stream.sh names it <name>-events, where the
+    // content broadcast is <name>.hang or <name>.multi.hang.
+    eventsBroadcast: args.mode === "sgai" ? `${args.broadcast.replace(/(\.multi)?\.hang$/, "")}-events` : null,
     // Subscribe-only token from stream.sh --auth/--auth-key. Handing it to anyone who
     // can reach the dashboard is fine for this sandbox: they could already reach the
     // terminal it was printed in.
