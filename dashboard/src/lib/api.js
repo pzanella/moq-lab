@@ -6,6 +6,23 @@ export async function fetchConfig() {
     return res.json();
 }
 
+// The active network profile (stream.sh --netem), and a switch to another one.
+export async function fetchNetem() {
+    const res = await fetch("/api/netem", { cache: "no-store" });
+    if (!res.ok) throw new Error(`/api/netem: HTTP ${res.status}`);
+    return res.json();
+}
+
+export async function setNetem(profile) {
+    const res = await fetch("/api/netem", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ profile }),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || `/api/netem: HTTP ${res.status}`);
+    return res.json();
+}
+
 // The relay is published on the same host the dashboard was opened from.
 // http:// (not https://) is deliberate: @moq/net then fetches the relay's
 // self-signed certificate fingerprint from /certificate.sha256 and pins it for

@@ -365,6 +365,7 @@ podman run --rm -i --entrypoint moq moq-lab auth sign --key - --subscribe '**' \
 | `--auth-key FILE` | off | Like `--auth`, but sign with the key in `FILE` |
 | `--dashboard` | off | Serve the real-time monitoring web UI on `http://localhost:8080` |
 | `--dashboard-port N` | `8080` | Like `--dashboard`, on port `N` (must differ from `--port`) |
+| `--netem PROFILE` | off | Shape the network between the relay and its viewers: `mobile`, `lossy`, `congested`, `satellite`, or `off` (see [Network lab](#network-lab---netem)) |
 
 ### npm/pnpm shortcut
 
@@ -1030,6 +1031,56 @@ pnpm dev                               # terminal 2: http://localhost:5173
 `DASHBOARD_API=http://localhost:9000` if you used `--dashboard-port 9000`.
 Changes to the UI reach `./stream.sh --dashboard` the next time the image
 builds, which `stream.sh` does on every run.
+
+### Network lab (`--netem`)
+
+`--netem PROFILE` makes the network between the relay and its viewers worse,
+with Linux [netem](https://man7.org/linux/man-pages/man8/tc-netem.8.html).
+Use it to see how MoQ behaves on a bad network: the charts above show what
+happens to RTT, bitrate, jitter, frame rate, and latency.
+
+```bash
+./stream.sh bbb --dashboard --netem mobile
+```
+
+| Profile | Delay | Loss | Rate |
+|---|---|---|---|
+| `mobile` | 60 ms ± 20 ms | 0.5% | 8 Mbit/s |
+| `lossy` | — | 3% | — |
+| `congested` | 40 ms ± 10 ms | 1% | 3 Mbit/s |
+| `satellite` | 300 ms ± 20 ms | — | 10 Mbit/s |
+| `off` | — | — | — |
+
+With `--dashboard`, the **Network lab** card switches between the profiles
+while the stream runs, so you can compare them on the same stream. The
+profiles are defined in `lib/netem.mjs`. The dashboard can only pick one of
+them by name.
+
+What is shaped:
+
+- Only what the relay sends to its viewers: players, the dashboard page's
+  MoQ sessions, and the host-side SGAI scripts. So the delay is one way: the
+  RTT goes up by the delay, not by twice the delay.
+- Not the ingest pipeline: `moq import` talks to the relay over
+  `localhost` inside the container.
+- Not the dashboard's own HTTP API: it measures the clock offset between
+  your machine and the container, which needs the same delay both ways.
+
+Good to know:
+
+- `stream.sh` gives the container the `NET_ADMIN` capability, but only
+  with `--netem`. It is limited to the container's own network.
+- With rootless Podman, the viewer traffic reaches the relay on the
+  container's loopback interface, so the shaping is set up on `lo` as well
+  as on `eth0`.
+- With a high delay (for example `satellite`), the browser may connect over
+  the WebSocket fallback (TCP) instead of WebTransport: the two race, and
+  the slower QUIC handshake can lose. The header shows which one is in use.
+  Over TCP, frames then arrive in bursts, so the frame rate and the latency
+  jump around, and some 1-second ticks show "—".
+- On Linux, the host kernel needs the `sch_netem`, `sch_prio`, and `cls_u32`
+  modules. Most distributions load them on demand; if `tc` fails, run
+  `sudo modprobe -a sch_netem sch_prio cls_u32`.
 
 ### Limitations
 

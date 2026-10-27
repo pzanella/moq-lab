@@ -8,6 +8,8 @@
 //   GET /api/time     this container's clock, so the browser can correct for host/VM clock skew
 //   GET /api/events   Server-Sent Events: `log` (container stdout/stderr lines) and
 //                     `ingest` (lib/ingest-clock.mjs samples, for end-to-end latency)
+//   GET /api/netem    the active network profile (stream.sh --netem)
+//   POST /api/netem   switch to another profile: {"profile": "<name>"}
 //
 // Usage: node server.mjs --port 8080 --relay-port 4443 --broadcast bbb.hang --mode base
 //                        --abr-ladder false --log-file /tmp/moq-lab.log --ingest-file /tmp/moq-lab-ingest.json
@@ -17,6 +19,7 @@ import { extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../../lib/cli.mjs";
 import { createLogger } from "../../lib/log.mjs";
+import { applyProfile, currentShaping, PROFILES } from "../../lib/netem.mjs";
 
 const log = createLogger("dashboard");
 
@@ -38,7 +41,16 @@ const CONFIG = {
     // can reach the dashboard is fine for this sandbox: they could already reach the
     // terminal it was printed in.
     jwt: process.env.MOQ_LAB_VIEWER_JWT || null,
+    // Network profiles can only be switched when stream.sh --netem gave the
+    // container NET_ADMIN, so the dashboard only offers them then.
+    netem: process.env.MOQ_LAB_NETEM
+        ? Object.fromEntries(Object.entries(PROFILES).map(([name, p]) => [name, p.label]))
+        : null,
 };
+
+let netemProfile = process.env.MOQ_LAB_NETEM || null;
+// A profile name is a few bytes; refuse anything bigger before parsing it.
+const MAX_BODY_BYTES = 1024;
 
 // How much log history a newly opened tab gets.
 const LOG_BACKLOG = 1000;
@@ -131,6 +143,55 @@ function sendJson(res, body) {
     res.end(JSON.stringify(body));
 }
 
+async function sendNetem(res) {
+    sendJson(res, { profile: netemProfile, shaping: await currentShaping() });
+}
+
+function readJsonBody(req) {
+    return new Promise((resolve, reject) => {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk) => {
+            body += chunk;
+            if (body.length > MAX_BODY_BYTES) {
+                reject(new Error("body too large"));
+                req.destroy();
+            }
+        });
+        req.on("end", () => {
+            try {
+                resolve(JSON.parse(body));
+            } catch {
+                reject(new Error("body is not JSON"));
+            }
+        });
+        req.on("error", reject);
+    });
+}
+
+async function handleNetem(req, res) {
+    if (!CONFIG.netem) {
+        res.writeHead(404).end();
+        return;
+    }
+    if (req.method !== "GET" && req.method !== "POST") {
+        res.writeHead(405).end();
+        return;
+    }
+    if (req.method === "POST") {
+        // A cross-site page can't send this content type without a CORS preflight,
+        // which this server never answers, so only the dashboard itself can switch.
+        if (req.headers["content-type"] !== "application/json") throw new Error("expected application/json");
+        const { profile } = await readJsonBody(req);
+        // applyProfile() only accepts a name from PROFILES; it never builds a command
+        // from the request.
+        await applyProfile(profile);
+        netemProfile = profile;
+        log(`network profile: ${profile}`);
+    }
+    await sendNetem(res);
+}
+
 function serveStatic(req, res, pathname) {
     let decoded;
     try {
@@ -163,6 +224,14 @@ function serveStatic(req, res, pathname) {
 
 const server = createServer((req, res) => {
     const { pathname } = new URL(req.url, "http://localhost");
+
+    if (pathname === "/api/netem") {
+        handleNetem(req, res).catch((err) => {
+            res.writeHead(400, { "content-type": "text/plain" });
+            res.end(`${err.message}\n`);
+        });
+        return;
+    }
 
     if (req.method !== "GET" && req.method !== "HEAD") {
         res.writeHead(405).end();

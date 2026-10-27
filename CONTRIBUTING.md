@@ -91,7 +91,7 @@ Podman, so no real content broadcast — the Media Timeline needs one, see
 below). It also checks that no event is lost between the publisher and the
 subscriber (`sgai/event-delivery.ci-check.mjs`). `smoke-test-podman-build` builds the actual sandbox image and the
 synthetic test clip once, sharing both via artifacts with one job per
-pipeline mode (`smoke-test-podman-base`, `-auth`, `-ssai`, `-ssai-abr`,
+pipeline mode (`smoke-test-podman-base`, `-auth`, `-netem`, `-ssai`, `-ssai-abr`,
 `-csai`, `-sgai`, `-dashboard`) — split out so each mode gets its own pass/fail check instead of
 one job with five sequential steps, and a failure in one doesn't block the
 others from reporting. Together they check the relay's HTTP API (broadcast

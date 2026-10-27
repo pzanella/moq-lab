@@ -12,6 +12,18 @@ any breaking changes worth flagging for the next person to bump.
 ## Unreleased
 
 ### Added
+- Network lab: `stream.sh --netem PROFILE` (`mobile`, `lossy`,
+  `congested`, `satellite`, `off`) shapes what the relay sends to its
+  viewers with Linux netem. The profiles are in the new `lib/netem.mjs`. With
+  `--dashboard`, a **Network lab** card switches profiles at runtime
+  (`GET`/`POST /api/netem`, which only accepts a profile name and needs
+  `Content-Type: application/json`). Only relay -> viewer traffic is shaped:
+  not the ingest, and not the dashboard's HTTP API. A prio qdisc and a u32
+  filter on the relay port do this on both `eth0` and `lo`, because with
+  rootless Podman the viewer traffic reaches the relay over `lo`. The
+  container gets `NET_ADMIN` only with `--netem`. The image now includes
+  `iproute2`. New CI job `smoke-test-podman-netem`. See README, "Network
+  lab".
 - Dashboard **Player** card: plays the stream with `@moq/watch` 0.6.6 in
   every mode. With `--sgai-mode` it is the SGAI player that was missing: it
   reads the Event Timeline (`dashboard/src/lib/sgai.js`) and switches from
