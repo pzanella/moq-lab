@@ -12,6 +12,15 @@ any breaking changes worth flagging for the next person to bump.
 ## Unreleased
 
 ### Added
+- Upstream tracking. `.github/workflows/upstream-check.yml` runs every
+  Monday (or by hand): it compares the pinned `moq-relay`, `moq-cli`,
+  `@moq/net`, and `@moq/msf` with the newest releases
+  (`.github/scripts/upstream-check.sh`) and opens or updates one issue,
+  "Upstream MoQ updates available". `.github/dependabot.yml` opens weekly
+  grouped PRs for GitHub Actions and npm packages, except `@moq/*`, which
+  move together with the binaries. CI's `lint` job now fails when the
+  `moq-relay` pin in `Containerfile` and `ci.yml`, or the `@moq/net` pin in
+  `package.json` and `dashboard/package.json`, don't match.
 - Optional remote source: `stream.sh --source URL` publishes an MP4 file,
   an HLS playlist, or a DASH manifest (on demand or live) over MoQ, instead
   of `assets/<name>.mp4`. `<name>` then only names the broadcast (default

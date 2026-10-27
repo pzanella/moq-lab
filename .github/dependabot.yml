@@ -1,0 +1,35 @@
+# Weekly update PRs for GitHub Actions and npm dependencies.
+#
+# @moq/* is ignored on purpose: @moq/net and @moq/msf must move together with
+# moq-cli/moq-relay in the Containerfile (see CONTRIBUTING.md, "Bump pinned
+# versions together"). .github/workflows/upstream-check.yml reports new MoQ
+# releases in one issue instead.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "@moq/*"
+    groups:
+      root:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "@moq/*"
+    groups:
+      dashboard:
+        patterns: ["*"]
