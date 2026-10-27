@@ -20,7 +20,7 @@
 // On a relay started with stream.sh --auth/--auth-key, put the viewer token
 // stream.sh prints in --url's query: "http://localhost:4443/?jwt=<token>#token=XYZ789".
 import * as Msf from "@moq/msf";
-import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced } from "./transport.mjs";
+import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForBroadcast } from "./transport.mjs";
 import { SEGMENTATION_TYPE, SEGMENTATION_TYPE_NAMES } from "./event-timeline.mjs";
 import { parseFragmentVars, parseUri, substitute } from "../lib/msf-uri.mjs";
 import { parseArgs } from "../lib/cli.mjs";
@@ -50,20 +50,19 @@ process.on("SIGINT", () => {
 
 while (!stopping) {
     let conn;
+    const origin = new Moq.Origin.Producer();
     try {
-        conn = await connectRelay(url);
+        conn = await connectRelay(url, { consume: origin });
         log(`connected to ${url}, waiting for '${eventsBroadcast}' to be announced...`);
 
-        const path = Moq.Path.from(eventsBroadcast);
-        const found = await waitForAnnounced(conn, path);
-        if (!found) throw new Error("announced stream ended before broadcast appeared");
+        const broadcast = await waitForBroadcast(origin, eventsBroadcast);
+        if (!broadcast) throw new Error("announced stream ended before broadcast appeared");
 
         log(`'${eventsBroadcast}' is live, subscribing to the events track...`);
-        const broadcast = conn.consume(path);
 
         // Sanity-check the catalog through the real MSF schema (Msf.decode() runs
         // inside Msf.fetch()) instead of trusting the publisher's raw JSON on faith.
-        const catalogTrack = broadcast.subscribe(CATALOG_TRACK_NAME, { priority: 0 });
+        const catalogTrack = broadcast.track(CATALOG_TRACK_NAME).subscribe({ priority: 0 }).ordered();
         const catalog = await Msf.fetch(catalogTrack);
         if (catalog) {
             log(`catalog: ${catalog.tracks.map((t) => `${t.name} (${t.packaging})`).join(", ")}`);
@@ -71,14 +70,14 @@ while (!stopping) {
             log("catalog track closed before a snapshot arrived");
         }
 
-        const eventsTrack = broadcast.subscribe("events", { priority: 0 });
+        const eventsTrack = broadcast.track("events").subscribe({ priority: 0 });
 
         // Media Timeline: logged on its own, concurrently with the Event Timeline
         // loop below -- a real subscriber consumes both per the spec's
         // Configuration principle (subscribe to both the media timeline and the
         // event timeline), not just the ad-decisioning signaling.
         (async () => {
-            const mediaTimeTrack = broadcast.subscribe("mediatime", { priority: 0 });
+            const mediaTimeTrack = broadcast.track("mediatime").subscribe({ priority: 0 }).ordered();
             for (;;) {
                 const entry = await mediaTimeTrack.readJson();
                 if (entry === undefined) break;
@@ -88,8 +87,8 @@ while (!stopping) {
         })().catch((err) => log(`mediatime track error: ${err.message ?? err}`));
 
         // The publisher writes one group per ad-break cycle, one frame per event. Read each
-        // group to its end: readJson() would drop an older group as soon as a newer one
-        // exists, and lose the events still on the way in it.
+        // group to its end, so no event of a cycle is skipped when the next cycle's group
+        // arrives.
         let group;
         while (!stopping) {
             const record = group ? await group.readJson() : undefined;
@@ -143,5 +142,6 @@ while (!stopping) {
         }
     } finally {
         conn?.close();
+        origin.close();
     }
 }

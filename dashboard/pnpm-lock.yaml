@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@moq/net':
-        specifier: 0.3.5
-        version: 0.3.5(@zod/mini@4.6.5(zod@4.6.5))(react@19.3.0)(zod@4.6.5)
+        specifier: 0.4.6
+        version: 0.4.6(@zod/mini@4.6.5(zod@4.6.5))(react@19.3.0)(zod@4.6.5)
       chart.js:
         specifier: ^4.5.1
         version: 4.5.1
@@ -55,17 +55,20 @@ packages:
   '@kurkle/color@0.3.4':
     resolution: {integrity: sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w==}
 
-  '@moq/net@0.3.5':
-    resolution: {integrity: sha512-H87cqGt9aFLgZ6DtA2xzbL4KrLWGze+UuvU6knRJazIkEek1t7PxoSr+cn+hLAqUSeKGSd6G5JjE3g5xjZMHIw==}
+  '@moq/net@0.4.6':
+    resolution: {integrity: sha512-ePAkUexvNMvnTL/Er5ehZ76J43ZaURio4ixZXMVEP9WikqHg1UUYCkooXXCQyUSgKVwaXOrDXGsZ6EWK9TZ/Bw==}
     peerDependencies:
       '@zod/mini': ^4.5.0
       zod: ^4.5.0
 
+  '@moq/pattern@0.2.1':
+    resolution: {integrity: sha512-NXlegs0abkYoIUkcxyJjnUHC1CGw8VkooAbuNKLK5AF0hCAyUWw1QNliHaLBty4K76qfrrvJK6cf7j31Z0KF0A==}
+
   '@moq/qmux@0.3.3':
     resolution: {integrity: sha512-Ez1GCVwpyNGB0eWvhKIXOjXrfRlMdmO0lpJ7gqInZFzsOsYTyML0WRgh24Itczp9Kev0CXsUA/K+XrGs1dRKUA==}
 
-  '@moq/signals@0.2.5':
-    resolution: {integrity: sha512-xjwLI2ZR771WdOKlSJHx07VLkkWlZCf0oGUG1Us7DbrwCf0AVSGmSoCg34Y7fE+os3whJWXAMjLa9bMobrQPIg==}
+  '@moq/signals@0.2.6':
+    resolution: {integrity: sha512-8L5y9cJSOVYGrHCZ20kcZsrmoxVXzl2dBQhsRj8H4zbbul70SmZcdeLG+O3JBP5W3tjo8EmLR+DOmh1/p7QQYw==}
     peerDependencies:
       '@types/react': ^19.2.17
       react: ^19.3.0
@@ -608,10 +611,11 @@ snapshots:
 
   '@kurkle/color@0.3.4': {}
 
-  '@moq/net@0.3.5(@zod/mini@4.6.5(zod@4.6.5))(react@19.3.0)(zod@4.6.5)':
+  '@moq/net@0.4.6(@zod/mini@4.6.5(zod@4.6.5))(react@19.3.0)(zod@4.6.5)':
     dependencies:
+      '@moq/pattern': 0.2.1
       '@moq/qmux': 0.3.3
-      '@moq/signals': 0.2.5(react@19.3.0)
+      '@moq/signals': 0.2.6(react@19.3.0)
       '@zod/mini': 4.6.5(zod@4.6.5)
       async-mutex: 0.5.0
       bowser: 2.14.1
@@ -621,11 +625,13 @@ snapshots:
       - react
       - solid-js
 
+  '@moq/pattern@0.2.1': {}
+
   '@moq/qmux@0.3.3':
     dependencies:
       '@moq/web-socket-stream': 0.1.1
 
-  '@moq/signals@0.2.5(react@19.3.0)':
+  '@moq/signals@0.2.6(react@19.3.0)':
     optionalDependencies:
       react: 19.3.0
 

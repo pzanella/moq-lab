@@ -50,6 +50,29 @@ any breaking changes worth flagging for the next person to bump.
   SCTE's member paywall. Tracked as a known gap (see GitHub issue).
 
 ### Changed
+- Updated `@moq/net` 0.3.5 → 0.4.6 (root and `dashboard/`) and `@moq/msf`
+  0.2.2 → 0.3.1. `@moq/msf` 0.3.1 still needs `patches/@moq__msf.patch`.
+  The 0.4 API is new, so `sgai/` and the dashboard were rewritten for it:
+  - Connections take an `Origin.Producer`: `publish` for what a script
+    announces, `consume` for what it reads. `sgai/transport.mjs`'s
+    `waitForBroadcast()`/`waitForAnnounced()` wait with
+    `origin.request(path, { announced: true })` instead of `announced()`.
+    They take a `timeoutMs`: a timeout made with `AbortSignal.any()` and
+    `AbortSignal.timeout()` could be garbage-collected on Node 20 before it
+    fired, and the ad-break loop then stopped at its second break.
+  - `sgai/ad-decisioning-publisher.mjs` creates its tracks up front
+    (`createTrack()`) instead of answering each `requested()` track. The
+    library serves every subscriber from them, and a new subscriber starts at
+    the newest group from its first frame. So the copy of the current cycle's
+    events kept for late subscribers is no longer needed.
+  - Readers use `track(name).subscribe()`, with `.ordered()` where they read
+    frames (`readFrameSequence()` is gone; `Ordered.readFrame()` returns the
+    group and frame numbers).
+  - The dashboard now talks `moq-lite-06` to the relay (was `moq-lite-05`).
+
+  Tested end to end: SGAI in Podman (no lost events, a subscriber that joins
+  late still gets the current cycle, Media Timeline, ad breaks) and the
+  dashboard in Chrome.
 - Updated `moq-relay` 0.14.5 → 0.17.8 and `moq-cli` 0.10.0 → 0.14.8
   (`Containerfile`, and `MOQ_RELAY_VERSION` in CI). `@moq/net` and
   `@moq/msf` stay at 0.3.5 / 0.2.2: they work with the new relay, and their

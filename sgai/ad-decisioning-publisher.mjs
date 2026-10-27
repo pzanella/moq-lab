@@ -30,7 +30,7 @@
 // --url "http://localhost:4443/?jwt=<token>".
 import { spawn } from "node:child_process";
 import * as Msf from "@moq/msf";
-import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced } from "./transport.mjs";
+import { CATALOG_TRACK_NAME, connectRelay, Moq, waitForAnnounced, waitForBroadcast } from "./transport.mjs";
 import {
     placementOpportunityStart,
     placementOpportunityEnd,
@@ -111,19 +111,28 @@ function adUpidUri(cycle) {
     return upidTokenTemplate ? `${base}&tok=%token%` : base;
 }
 
-const conn = await connectRelay(url);
-log(`connected to ${url}`);
-
 // Declared early -- the Media Timeline observer below (an async IIFE that
 // starts running immediately, well before the ad-break loop further down)
 // checks this in its own loops so a shutdown signal can actually stop it
 // instead of leaving a zombie process behind.
 let running = true;
-process.on("SIGINT", () => { running = false; });
-process.on("SIGTERM", () => { running = false; });
+const shutdown = new AbortController();
+for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+        running = false;
+        shutdown.abort();
+    });
+}
 
-const broadcast = new Moq.Broadcast.Producer();
-conn.publish(Moq.Path.from(eventsBroadcast), broadcast);
+// `publish` holds what this script announces (the events broadcast); `consume`
+// receives what it reads from the relay (the content and ad broadcasts).
+const published = new Moq.Origin.Producer();
+const consumed = new Moq.Origin.Producer();
+const conn = await connectRelay(url, { publish: published.consume(), consume: consumed });
+log(`connected to ${url}`);
+
+const broadcast = published.createBroadcast(Moq.Path.from(eventsBroadcast));
+broadcast.announce();
 
 // MSF (draft-ietf-moq-msf-01) catalog: "eventtimeline"/"mediatimeline" are real,
 // schema-validated packaging values (see @moq/msf's PackagingSchema), unlike the
@@ -157,97 +166,48 @@ const catalogBytes = Msf.encode({
     ],
 });
 
-// `broadcast.subscribe(name, options)` only pre-registers a *local* Track -- it does not
-// bind to whatever Track a real network SUBSCRIBE later gets. Confirmed against a live relay:
-// a producer that calls subscribe() once at startup and writes to that Track forever never
-// delivers a single frame to any real subscriber, because the wire layer calls subscribe()
-// itself for each incoming SUBSCRIBE (see @moq/net's lite/publisher.ts runSubscribe), handing
-// back a *different* Track instance that only shares the name. The correct pattern (see
-// @moq/net's examples/publish.ts) is to react to broadcast.requested() and accept() the
-// Track.Request it actually carries, once per subscriber.
-const eventsTracks = [];
-const mediaTimeTracks = [];
+// Tracks are created up front, and @moq/net serves every subscriber from them: a new
+// subscriber starts at the newest group, from its first frame. The catalog is one group
+// that stays open for the whole run. The catalog has no presentation time of its own,
+// so Timestamp.now() is the right timestamp for a control-plane payload like this one.
+const catalogGroup = broadcast.createTrack(CATALOG_TRACK_NAME).appendGroup();
+catalogGroup.writeFrame({ payload: catalogBytes, timestamp: Moq.Time.Timestamp.now() });
 
-(async () => {
-    for (;;) {
-        const request = await broadcast.requested();
-        if (!request) break;
-
-        if (request.name === CATALOG_TRACK_NAME) {
-            // The catalog is a one-shot snapshot: write it once per subscriber, mirroring
-            // hang's json Producer.serve() seeding each new subscriber directly. Left open
-            // rather than closed immediately -- closing the track right after writing races
-            // the async, fire-and-forget group delivery in @moq/net's publisher and can tear
-            // down the group's stream before the frame reaches the subscriber (RESET_STREAM).
-            // The catalog has no presentation time of its own, so Timestamp.now() is the
-            // right timestamp for a control-plane payload like this one.
-            const producer = request.accept();
-            producer.writeFrame({ payload: catalogBytes, timestamp: Moq.Time.Timestamp.now() });
-        } else if (request.name === "events") {
-            addEventsTrack(request.accept());
-        } else if (request.name === "mediatime") {
-            mediaTimeTracks.push(request.accept());
-        } else {
-            request.reject(new Error(`unknown track: ${request.name}`));
-        }
-    }
-})();
+const eventsTrack = broadcast.createTrack("events");
+const mediaTimeTrack = broadcast.createTrack("mediatime");
 
 // One group per ad-break cycle, and each event is one frame in it. A group is one QUIC
 // stream, so its frames arrive complete and in order. With one group per event, two events
 // written close together were two groups, and a subscriber that already had the newer one
-// dropped the older one if its frame had not arrived yet (@moq/net's readFrame() skips older
-// groups). This also keeps adStart before placementOpportunityStart (see the ad-break loop).
-//
-// cycleEvents holds the events of the current cycle, so a subscriber that joins in the
-// middle of a cycle first gets what it missed, for example the Ad Start of a break that
-// is already running.
+// could drop the older one if its frame had not arrived yet. This also keeps adStart before
+// placementOpportunityStart (see the ad-break loop). A subscriber that joins in the middle
+// of a cycle starts at that cycle's group, so it also gets the events it missed, for
+// example the Ad Start of a break that is already running.
 //
 // The next group opens at the first event of the next cycle, not when the cycle starts:
 // the last events of a cycle then have adBreakEvery seconds to arrive before a newer
 // group exists.
 let eventsCycle = 0;
-let cycleEvents = [];
-
-function addEventsTrack(track) {
-    const entry = { track, cycle: eventsCycle, group: track.appendGroup() };
-    for (const record of cycleEvents) entry.group.writeJson(record);
-    eventsTracks.push(entry);
-}
+let eventsGroup = null;
+let eventsGroupCycle = null;
 
 function startEventsCycle(cycle) {
     eventsCycle = cycle;
-    cycleEvents = [];
 }
 
 function emit(record) {
-    cycleEvents.push(record);
-    for (let i = eventsTracks.length - 1; i >= 0; i--) {
-        const entry = eventsTracks[i];
-        try {
-            if (entry.cycle !== eventsCycle) {
-                entry.group.close();
-                entry.group = entry.track.appendGroup();
-                entry.cycle = eventsCycle;
-            }
-            entry.group.writeJson(record);
-        } catch {
-            // Subscriber disconnected; drop it rather than let it break future emits.
-            eventsTracks.splice(i, 1);
-        }
+    if (eventsGroupCycle !== eventsCycle) {
+        eventsGroup?.close();
+        eventsGroup = eventsTrack.appendGroup();
+        eventsGroupCycle = eventsCycle;
     }
+    eventsGroup.writeJson(record);
     const name = SEGMENTATION_TYPE_NAMES[record.data.segmentation_type_id] ?? record.data.segmentation_type_id;
     log(`emit ${name} (event_id=${record.data.segmentation_event_id}, m=${record.m})`);
 }
 
 function emitMediaTimelineEntry(entry) {
-    for (let i = mediaTimeTracks.length - 1; i >= 0; i--) {
-        try {
-            mediaTimeTracks[i].writeJson(entry);
-        } catch {
-            mediaTimeTracks.splice(i, 1);
-        }
-    }
+    mediaTimeTrack.writeJson(entry);
 }
 
 // Media Timeline: observes the real content broadcast (subscribing never affects
@@ -279,17 +239,12 @@ function emitMediaTimelineEntry(entry) {
             `(videoTrackId=${timing.videoTrackId}, timescale=${timing.timescale})`,
     );
 
-    const contentPath = Moq.Path.from(contentBroadcast);
-    const found = await waitForAnnounced(conn, contentPath);
-    if (!running) return;
-    if (!found) {
-        log(`'${contentBroadcast}' was never announced; Media Timeline disabled`);
-        return;
-    }
-    const contentTrack = conn.consume(contentPath).subscribe(timing.trackName, { priority: 0 });
+    const content = await waitForBroadcast(consumed, contentBroadcast, { signal: shutdown.signal });
+    if (!content) return;
+    const contentTrack = content.track(timing.trackName).subscribe({ priority: 0 }).ordered();
 
     while (running) {
-        const object = await contentTrack.readFrameSequence();
+        const object = await contentTrack.readFrame();
         if (!object) {
             log("content track closed; Media Timeline stopped");
             return;
@@ -374,15 +329,15 @@ while (running) {
     // for the relay's own ANNOUNCE (the same primitive the Media Timeline observer above uses for
     // the content broadcast) makes the guarantee real instead of incidental.
     // Capped rather than an unbounded wait: if the podman exec above never results in an
-    // ANNOUNCE (e.g. the container/ffmpeg/moq chain failed outright), waitForAnnounced's
-    // announced.next() loop would otherwise never resolve, freezing every subsequent ad
+    // ANNOUNCE (e.g. the container/ffmpeg/moq chain failed outright), waitForAnnounced()
+    // would otherwise never resolve, freezing every subsequent ad
     // break behind this one. The cap is generous relative to podman-exec-cold-start latency
     // but still bounded by the break's own length, so a stuck wait can't outlast its break.
     const ANNOUNCE_WAIT_CAP_MS = Math.min(8000, adBreakLength * 1000);
-    const adAnnounced = await Promise.race([
-        waitForAnnounced(conn, Moq.Path.from(cycleAdBroadcastName)),
-        new Promise((resolve) => setTimeout(() => resolve(false), ANNOUNCE_WAIT_CAP_MS)),
-    ]);
+    const adAnnounced = await waitForAnnounced(consumed, cycleAdBroadcastName, {
+        signal: shutdown.signal,
+        timeoutMs: ANNOUNCE_WAIT_CAP_MS,
+    });
     if (!running) break;
     if (!adAnnounced) log(`WARNING: '${cycleAdBroadcastName}' was not announced within ${ANNOUNCE_WAIT_CAP_MS}ms; emitting adStart anyway`);
     // adStart must be written (and observed) before placementOpportunityStart: a subscriber is
@@ -404,4 +359,5 @@ while (running) {
 }
 
 log("shutting down");
+broadcast.close();
 conn.close();

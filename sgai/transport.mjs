@@ -42,10 +42,12 @@ const Moq = await import("@moq/net");
 
 /**
  * Connects to a MoQ relay over WebSocket (WebTransport is unavailable in Node).
+ * `publish` serves the broadcasts of an Origin.Producer you fill; `consume` is the
+ * Origin.Producer that receives the relay's broadcasts. Both are optional.
  * @param {string} url - e.g. "https://localhost:4443"
  */
-export async function connectRelay(url) {
-    return Moq.Connection.connect(new URL(url), { websocket: { enabled: true } });
+export async function connectRelay(url, { publish, consume } = {}) {
+    return Moq.Connection.connect({ url: new URL(url), websocket: { enabled: true }, publish, consume });
 }
 
 // The conventional MSF catalog track name (rs/moq-msf's `Catalog::DEFAULT_NAME`;
@@ -55,12 +57,50 @@ export const CATALOG_TRACK_NAME = "catalog";
 // Subscribing to a broadcast before the relay has announced it gets the
 // stream reset instead of queued -- wait for the ANNOUNCE first. Shared by
 // every host-side script that consumes a broadcast it doesn't itself own.
-export async function waitForAnnounced(conn, path) {
-    const announced = conn.announced(path);
-    for (;;) {
-        const entry = await announced.next();
-        if (!entry) return false;
-        if (entry.active) return true;
+// `origin` is the Origin.Producer passed to connectRelay() as `consume`.
+// Resolves with the broadcast, or undefined once `signal` aborts or `timeoutMs` passes.
+export async function waitForBroadcast(origin, name, { signal, timeoutMs } = {}) {
+    const request = origin.request(Moq.Path.from(name), { announced: true });
+    const active = await waitForActive(request, signal, timeoutMs);
+    if (!active) request.close();
+    return active;
+}
+
+// Like waitForBroadcast(), for a caller that only needs to know the broadcast is
+// there: resolves true or false, and doesn't keep the request open.
+export async function waitForAnnounced(origin, name, { signal, timeoutMs } = {}) {
+    const request = origin.request(Moq.Path.from(name), { announced: true });
+    try {
+        return (await waitForActive(request, signal, timeoutMs)) !== undefined;
+    } finally {
+        request.close();
+    }
+}
+
+// A plain timer, not AbortSignal.timeout() inside AbortSignal.any(): on Node 20 the
+// combined signal can be garbage-collected before it fires, and the wait never ends.
+async function waitForActive(request, signal, timeoutMs) {
+    let timer;
+    let onAbort;
+    const stop = new Promise((resolve) => {
+        if (timeoutMs !== undefined) timer = setTimeout(resolve, timeoutMs);
+        onAbort = resolve;
+        if (signal?.aborted) resolve();
+        signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    let stopped = false;
+    stop.then(() => {
+        stopped = true;
+    });
+    try {
+        for (;;) {
+            const active = request.active.peek();
+            if (active || stopped) return active;
+            await Promise.race([request.active.changed(), stop]);
+        }
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
     }
 }
 

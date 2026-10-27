@@ -44,7 +44,7 @@ export async function resolveVideoTiming(relayUrl, contentBroadcast, { timeoutMs
 }
 
 // A live object's payload is one CMAF fragment (moof+mdat, per run-stream.sh's
-// separate_moof+frag_every_frame flags): pulls out just the moof box's own
+// separate_moof and -frag_duration flags): pulls out just the moof box's own
 // content, since parseMoofDecodeTime() expects that, not the sibling mdat
 // alongside it (mirrors how ssai/impression-tracker.mjs's streaming parser
 // only ever hands moof its inner body).

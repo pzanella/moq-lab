@@ -693,8 +693,8 @@ first get the records of that cycle that were already sent. For example, if
 you join during an ad break, you still get its `Ad Start`. To read the track
 without losing records, read each group until it ends
 (`recvGroup()`, then `readJson()` on the group, as
-`sgai/debug-subscriber.mjs` does). The track-level `readJson()` of
-`@moq/net` drops an older group as soon as a newer one exists.
+`sgai/debug-subscriber.mjs` does). `@moq/net`'s `ordered()` reader is made
+for the live edge: it can skip an older group once a newer one exists.
 
 ### Media Timeline
 
@@ -1153,7 +1153,7 @@ Versions are pinned deliberately, not left floating — both sides move fast
 enough (weekly-ish point releases, occasional breaking changes) that an
 unpinned binary download or `npm install` can silently pick up different
 behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.14.8`/`0.17.8`
-([Containerfile](Containerfile)), `@moq/net` `0.3.5`/`@moq/msf` `0.2.2`
+([Containerfile](Containerfile)), `@moq/net` `0.4.6`/`@moq/msf` `0.3.1`
 ([package.json](package.json)). Bump the Rust and JS sides together and
 re-test rather than upgrading one at a time — see
 [CONTRIBUTING.md](CONTRIBUTING.md).

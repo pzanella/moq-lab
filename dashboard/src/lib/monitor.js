@@ -64,13 +64,15 @@ export class StreamMonitor {
     #abort = new AbortController();
 
     #conn = null;
+    #origin = null; // Origin.Producer that receives the relay's broadcasts
+    #request = null; // origin.request() for this.#broadcast
     #state = "connecting";
     #error = null;
     #catalog = null;
     #rendition = null;
     #preferredRendition = null;
     #currentBroadcast = null;
-    #video = null; // current video track Subscriber
+    #video = null; // current video track reader (Track.Ordered)
     #videoGeneration = 0;
     #liveSince = null;
 
@@ -118,8 +120,7 @@ export class StreamMonitor {
 
     close() {
         this.#abort.abort();
-        this.#video?.close();
-        this.#conn?.close();
+        this.#teardown();
     }
 
     async #run() {
@@ -143,8 +144,12 @@ export class StreamMonitor {
     #teardown() {
         this.#video?.close();
         this.#video = null;
+        this.#request?.close();
+        this.#request = null;
         this.#conn?.close();
         this.#conn = null;
+        this.#origin?.close();
+        this.#origin = null;
         this.#currentBroadcast = null;
         this.#catalog = null;
         this.#rendition = null;
@@ -154,31 +159,35 @@ export class StreamMonitor {
 
     async #session(signal) {
         this.#emit();
-        const conn = await Moq.Connection.connect(new URL(this.#relayUrl), {
+        const origin = new Moq.Origin.Producer();
+        this.#origin = origin;
+        const conn = await Moq.Connection.connect({
+            url: new URL(this.#relayUrl),
+            consume: origin,
             signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
         });
         this.#conn = conn;
         this.#error = null;
 
         // Subscribing before the relay has announced the broadcast gets the stream
-        // reset instead of queued (same as sgai/transport.mjs's waitForAnnounced).
+        // reset instead of queued (same as sgai/transport.mjs's waitForBroadcast).
         this.#state = "waiting";
         this.#emit();
-        const path = Moq.Path.from(this.#broadcast);
-        const announced = conn.announced(path);
-        for (;;) {
-            const entry = await Promise.race([announced.next(), conn.closed.then(() => undefined)]);
-            if (!entry) throw new Error("connection closed before the broadcast was announced");
-            if (entry.active) break;
+        const request = origin.request(Moq.Path.from(this.#broadcast), { announced: true });
+        this.#request = request;
+        const connClosed = conn.closed.then(() => undefined);
+        let broadcast = request.active.peek();
+        while (!broadcast) {
+            const changed = await Promise.race([request.active.changed(), connClosed.then(() => null)]);
+            if (changed === null) throw new Error("connection closed before the broadcast was announced");
+            broadcast = request.active.peek();
         }
-
-        const broadcast = conn.consume(path);
         this.#currentBroadcast = broadcast;
         this.#state = "live";
         this.#liveSince = Date.now();
         this.#emit();
 
-        const catalogTrack = broadcast.subscribe(CATALOG_TRACK, { priority: 0 });
+        const catalogTrack = broadcast.track(CATALOG_TRACK).subscribe({ priority: 0 }).ordered();
         let audio = null;
         const catalogLoop = (async () => {
             for (;;) {
@@ -193,7 +202,7 @@ export class StreamMonitor {
                 const audioName = Object.keys(this.#catalog?.audio?.renditions ?? {})[0];
                 if (audioName && audio?.name !== audioName) {
                     audio?.close();
-                    audio = broadcast.subscribe(audioName, { priority: 1 });
+                    audio = broadcast.track(audioName).subscribe({ priority: 1 }).ordered();
                     this.#drain(audio);
                 }
                 this.#emit();
@@ -201,9 +210,10 @@ export class StreamMonitor {
         })();
 
         // The session is over when the connection drops or the publisher goes away
-        // (the catalog track closes with its broadcast, e.g. on each SSAI pass restart).
+        // (e.g. on each SSAI pass restart): the catalog track ends, or the request
+        // stops pointing at this broadcast.
         try {
-            await Promise.race([conn.closed, catalogLoop]);
+            await Promise.race([connClosed, catalogLoop, request.active.changed()]);
         } finally {
             catalogTrack.close();
             audio?.close();
@@ -222,11 +232,11 @@ export class StreamMonitor {
         this.#recentTimestamps = [];
         this.#groupStartSecs = null;
 
-        const track = broadcast.subscribe(rendition, { priority: 2 });
+        const track = broadcast.track(rendition).subscribe({ priority: 2 }).ordered();
         this.#video = track;
         (async () => {
             for (;;) {
-                const frame = await track.readFrameSequence();
+                const frame = await track.readFrame();
                 if (!frame || generation !== this.#videoGeneration) return;
                 this.#onVideoFrame(frame);
             }
