@@ -93,9 +93,9 @@ jobs:
           PUB_PID=$!
 
           # Give the publisher a moment to announce its broadcasts before the
-          # subscriber connects, same as smoke-test-podman's SGAI step -- without
-          # this the subscriber can attach after the earliest events already fired
-          # and permanently miss them (this is a live stream, not a replay).
+          # subscriber connects, same as smoke-test-podman's SGAI step. A subscriber
+          # that joins late gets the events of the current ad-break cycle again,
+          # but not the ones of earlier cycles.
           sleep 1
           nohup node sgai/debug-subscriber.mjs \
             --url "http://localhost:4989#token=XYZ789" --events-broadcast ci-test-events \
@@ -133,8 +133,11 @@ jobs:
             sleep 1
           done
 
-          kill "$SUB_PID" "$PUB_PID" 2>/dev/null || true
+          # Stop the publisher first, so the events it sent last can still arrive.
+          STOP_MS=$(node -e 'console.log(Date.now())')
+          kill "$PUB_PID" 2>/dev/null || true
           sleep 1
+          kill "$SUB_PID" 2>/dev/null || true
 
           echo "--- publisher.log ---"; cat /tmp/publisher.log
           echo "--- subscriber.log ---"; cat /tmp/subscriber.log
@@ -146,6 +149,8 @@ jobs:
               fail=1
             fi
           done
+          node sgai/event-delivery.ci-check.mjs --publisher-log /tmp/publisher.log \
+            --subscriber-log /tmp/subscriber.log --stop-ms "$STOP_MS" || fail=1
           exit "$fail"
 
   # These jobs build the real sandbox image and drive the base, SSAI, CSAI,
@@ -811,8 +816,11 @@ jobs:
             sleep 1
           done
 
-          kill "$SUB_PID" "$PUB_PID" 2>/dev/null || true
+          # Stop the publisher first, so the events it sent last can still arrive.
+          STOP_MS=$(node -e 'console.log(Date.now())')
+          kill "$PUB_PID" 2>/dev/null || true
           sleep 1
+          kill "$SUB_PID" 2>/dev/null || true
 
           echo "--- sgai-publisher.log ---"; cat /tmp/sgai-publisher.log
           echo "--- sgai-subscriber.log ---"; cat /tmp/sgai-subscriber.log
@@ -824,5 +832,7 @@ jobs:
               fail=1
             fi
           done
+          node sgai/event-delivery.ci-check.mjs --publisher-log /tmp/sgai-publisher.log \
+            --subscriber-log /tmp/sgai-subscriber.log --stop-ms "$STOP_MS" || fail=1
           podman rm -f ci-sgai
           exit "$fail"

@@ -683,6 +683,17 @@ per-break ad broadcast name), `Placement Opportunity Start`, `Ad End`,
 from content on `Placement Opportunity Start`, `FETCH` the ad broadcast named
 in `Ad Start`, and `RESUBSCRIBE` to content on `Placement Opportunity End`.
 
+On the `events` track, each ad-break cycle is one MoQ group, and each record
+is one frame in that group. A group travels on one QUIC stream, so its
+records arrive complete and in order. A new group starts with the first
+record of the next cycle. If you subscribe in the middle of a cycle, you
+first get the records of that cycle that were already sent. For example, if
+you join during an ad break, you still get its `Ad Start`. To read the track
+without losing records, read each group until it ends
+(`recvGroup()`, then `readJson()` on the group, as
+`sgai/debug-subscriber.mjs` does). The track-level `readJson()` of
+`@moq/net` drops an older group as soon as a newer one exists.
+
 ### Media Timeline
 
 `sgai/ad-decisioning-publisher.mjs` also subscribes to the content

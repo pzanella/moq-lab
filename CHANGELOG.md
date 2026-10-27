@@ -111,6 +111,19 @@ any breaking changes worth flagging for the next person to bump.
   against real binaries after the bump.
 
 ### Fixed
+- SGAI: events no longer get lost when two of them are sent close together.
+  The cause was on the reading side: each event was its own MoQ group, and
+  `@moq/net`'s track-level `readFrame()`/`readJson()` drops an older group
+  as soon as a newer one exists, even when the older group's frame has not
+  arrived yet. The 50 ms gap below only made this less likely. Now the
+  `events` track has one group per ad-break cycle, and each event is one
+  frame in it, so the events of a cycle arrive complete and in order. The
+  50 ms queue is removed. `sgai/debug-subscriber.mjs` reads each group to
+  its end. A subscriber that joins in the middle of a cycle now also gets
+  the events of that cycle that were already sent (before, it missed them).
+  New CI check `sgai/event-delivery.ci-check.mjs`, used by `smoke-test-sgai`
+  and `smoke-test-podman-sgai`: it compares the publisher's log with the
+  subscriber's log and fails if any event is lost. See README, section 7.
 - SGAI: an event could be lost on the way to the subscriber when it was
   sent at the same time as another one. Each event is its own MoQ group,
   and the older of two groups written in the same tick can be skipped. The
