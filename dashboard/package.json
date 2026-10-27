@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@moq/net": "0.4.6",
+    "@moq/watch": "0.6.6",
     "chart.js": "^4.5.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

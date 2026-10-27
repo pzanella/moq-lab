@@ -813,10 +813,11 @@ player's `moq.url` config in section 4 correctly uses `https://`.
 `#token=...` fragment:
 `--url "http://localhost:4443/?jwt=<viewer token>#token=XYZ789"`.
 
-**Current limitation**: this sandbox only covers the server/host delivery
-side. A player that actually acts on this signaling — subscribing to the
-events broadcast and switching between the content and ad tracks — is a
-separate piece of work, not included here.
+**A player that acts on it**: start the stream with `--sgai-mode
+--dashboard` and open the dashboard. Its **Player** card reads the events
+broadcast and switches between the content and ad broadcasts, as described
+in section 9. `sgai/debug-subscriber.mjs` above only logs what a player
+would do.
 
 ---
 
@@ -893,6 +894,25 @@ token from `stream.sh` and uses it for you.
 
 ### What you see
 
+- **Player:** the stream, played with
+  [`@moq/watch`](https://www.npmjs.com/package/@moq/watch). Audio starts
+  muted (browsers block sound until you click); use **Unmute**. With
+  `--sgai-mode`, the player also reads the Event Timeline (section 7) and
+  acts on it:
+  - `Ad Start` gives the ad broadcast (`ns=` in its upid).
+  - `Placement Opportunity Start` closes the content subscription and plays
+    the ad broadcast.
+  - `Placement Opportunity End` closes the ad and subscribes to the content
+    again.
+  - `Program Blackout Override` covers the picture and shows the alternate
+    content's upid (this sandbox has no alternate stream to play).
+
+  The card lists the latest events and shows two switch times: from the
+  event to the first frame drawn from the new broadcast. Each switch makes a
+  new `<moq-watch>` element, so the time includes the new subscription, the
+  first keyframe, and decoding. If you open the page in the middle of an ad
+  break, you still get its events: a new subscriber gets the current cycle's
+  events from the start.
 - **Transport & QUIC:** connection state, RTT, packet loss, jitter, and the
   received bitrate, with charts of bitrate and RTT over the last 2 minutes.
 - **Media stream:** resolution, frame rate, end-to-end latency, and codecs,
@@ -1020,7 +1040,9 @@ builds, which `stream.sh` does on every run.
   QUIC-level bitrate need `getStats()`; without it they show "—" or fall back
   to the payload bitrate. The tile says which source it is using. RTT falls
   back to the relay's `PROBE` estimate.
-- Each open dashboard tab is one more subscriber on the relay.
+- Each open dashboard tab opens two sessions on the relay: one for the
+  measurements and one for the player. With `--sgai-mode` there is a third
+  one, for the Event Timeline.
 
 ---
 

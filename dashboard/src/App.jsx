@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, Stat } from "./components/Card.jsx";
 import { LineChart } from "./components/LineChart.jsx";
 import { LogStream } from "./components/LogStream.jsx";
+import { Player } from "./components/Player.jsx";
 import { StatusBadge } from "./components/Status.jsx";
 import { fetchConfig, measureClockOffset, relayUrlFor, subscribeEvents } from "./lib/api.js";
 import { DASH, duration, fixed, grade, gradeFps, mbps, THRESHOLDS } from "./lib/format.js";
@@ -159,6 +160,8 @@ export default function App() {
                     {s.connection.error}
                 </p>
             )}
+
+            {config && <Player config={config} relayUrl={relayUrlFor(config)} />}
 
             <Card title="Transport & QUIC" subtitle="Measured on this browser's own MoQ session to the relay">
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">

@@ -405,7 +405,7 @@ jobs:
           curl -sf http://localhost:18080/api/config -o /tmp/dashboard-config.json
           node -e "
             const c = JSON.parse(require('fs').readFileSync('/tmp/dashboard-config.json'));
-            if (c.broadcast !== 'ci-test.hang' || c.relayPort !== 15443 || c.mode !== 'base') {
+            if (c.broadcast !== 'ci-test.hang' || c.relayPort !== 15443 || c.mode !== 'base' || c.eventsBroadcast !== null) {
               throw new Error('unexpected /api/config: ' + JSON.stringify(c));
             }
           "
