@@ -50,6 +50,28 @@ any breaking changes worth flagging for the next person to bump.
   SCTE's member paywall. Tracked as a known gap (see GitHub issue).
 
 ### Changed
+- Updated `moq-relay` 0.14.5 → 0.17.8 and `moq-cli` 0.10.0 → 0.14.8
+  (`Containerfile`, and `MOQ_RELAY_VERSION` in CI). `@moq/net` and
+  `@moq/msf` stay at 0.3.5 / 0.2.2: they work with the new relay, and their
+  update is a separate change. What changed for this repo:
+  - Relay config: `[server] listen` is now `[listen] bind`, and
+    `public = ""` is now `public = "**"` (grants are path patterns now).
+  - Auth: the relay no longer checks JWTs itself. With `--auth`/`--auth-key`,
+    `run-stream.sh` also starts `moq auth serve --key` in the container, and
+    the relay asks it about every new session (`[auth] url`). `moq token
+    generate/sign` is now `moq auth generate/sign`, and tokens grant `'**'`
+    instead of `""`.
+  - `moq --client-connect` is now `moq --connect`.
+  - `moq import fmp4` refuses ffmpeg's `frag_every_frame` (with audio and
+    video it repeats a fragment's `tfdt`). All fMP4 pipelines now use
+    `-frag_duration 1000`, which also gives one fragment per sample.
+  - A public relay refuses a request that carries a token with
+    `the auth server refused the session` (README, Troubleshooting).
+
+  Tested end to end in Podman: base, ABR ladder, SSAI, CSAI (CUEI
+  descriptor, blackout), SGAI (no lost events, Media Timeline, per-break ad
+  broadcasts), auth (no token and wrong key get `401`, a viewer token
+  can't publish), dashboard, and `--source` with HLS.
 - `ssai/impression-tracker.mjs`'s fMP4 parser moved to `lib/fmp4.mjs`
   (`FMP4Inspector`) so the dashboard's ingest tap can share it. No behavior
   change.

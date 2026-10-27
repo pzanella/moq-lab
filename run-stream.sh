@@ -113,14 +113,19 @@ case "$INPUT" in
 esac
 
 write_relay_config() {
-    local auth='public = ""'
+    local auth='public = "**"'
     if [ -n "${MOQ_LAB_AUTH_KEY:-}" ]; then
+        # The relay doesn't check tokens itself: it asks an auth server for each new
+        # session, and `moq auth serve` checks the JWT against the key. Like the
+        # dashboard server, it is not in the cleanup traps: it lives as long as the
+        # container.
         printf '%s' "$MOQ_LAB_AUTH_KEY" > /tmp/auth.jwk
-        auth='key = "/tmp/auth.jwk"'
+        moq auth serve --key /tmp/auth.jwk --listen 127.0.0.1:4440 &
+        auth='url = "http://127.0.0.1:4440/"'
     fi
     cat > /tmp/relay.toml <<EOF
-[server]
-listen = "[::]:${PORT}"
+[listen]
+bind = "[::]:${PORT}"
 tls.generate = ["localhost"]
 
 [web.http]
@@ -188,7 +193,7 @@ if [ "$CSAI" = true ]; then
         -f mpegts - |
         node /usr/local/bin/csai/ts-injector.mjs "$AD_BREAK_EVERY" "$AD_BREAK_LENGTH" \
             "$CSAI_BLACKOUT_AT" "$CSAI_BLACKOUT_LENGTH" "$CSAI_BLACKOUT_ALT_UPID" |
-        moq --client-connect "$RELAY_URL" --broadcast "$BROADCAST" import ts
+        moq --connect "$RELAY_URL" --broadcast "$BROADCAST" import ts
 
     echo "Source ended." >&2
     exit 0
@@ -280,17 +285,20 @@ publish_content() {
 
     # The dashboard's ingest tap is a pure pass-through; it only sits in the pipe when
     # the dashboard is on, so the default pipeline stays exactly ffmpeg | moq.
+    #
+    # -frag_duration 1000 (1 ms) gives one fragment per sample. moq-cli 0.11+ refuses
+    # frag_every_frame: with audio and video it repeats a fragment's tfdt.
     if [ -n "$DASHBOARD_PORT" ]; then
         ffmpeg -hide_banner "${FFMPEG_SOURCE_ARGS[@]}" -re "${SOURCE_OPTS[@]}" -i "$INPUT" \
             "${FFMPEG_ARGS[@]}" \
-            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
+            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer -frag_duration 1000 - |
             node /usr/local/bin/dashboard/server/ingest-tap.mjs |
-            moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
+            moq --connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
     else
         ffmpeg -hide_banner "${FFMPEG_SOURCE_ARGS[@]}" -re "${SOURCE_OPTS[@]}" -i "$INPUT" \
             "${FFMPEG_ARGS[@]}" \
-            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
-            moq --client-connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
+            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer -frag_duration 1000 - |
+            moq --connect "$RELAY_URL" --broadcast "$broadcast" import fmp4
     fi
 }
 
@@ -382,9 +390,9 @@ if [ "$SSAI" = true ]; then
             "${INPUT_ARGS[@]}" \
             -filter_complex_script "$FC_SCRIPT" \
             "${ENCODE_ARGS[@]}" \
-            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
+            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer -frag_duration 1000 - |
             node /usr/local/bin/ssai/impression-tracker.mjs "$AD_BREAK_EVERY" "$AD_BREAK_LENGTH" |
-            moq --client-connect "$RELAY_URL" --broadcast "$BROADCAST" import fmp4 || true
+            moq --connect "$RELAY_URL" --broadcast "$BROADCAST" import fmp4 || true
         echo "SSAI: pass complete, restarting..." >&2
     done
 elif [ "$SGAI" = true ]; then

@@ -31,7 +31,7 @@
 #                      this run; a viewer token is printed at startup. Without --auth or
 #                      --auth-key, the stream is public.
 # --auth-key FILE      Like --auth, but sign with this key (a JWK file, e.g. from
-#                      `moq token generate`), so tokens stay valid across runs.
+#                      `moq auth generate`), so tokens stay valid across runs.
 # --dashboard          Also serve the real-time monitoring web UI (dashboard/) from the
 #                      container, on http://localhost:8080. See README.md "Dashboard".
 # --dashboard-port N   Like --dashboard, on port N instead of 8080.
@@ -133,7 +133,7 @@ if [ "$PERSONALIZED_ADS" = true ] && [ "$SGAI" != true ]; then
 fi
 
 if [ -n "$AUTH_KEY_FILE" ] && [ ! -f "$AUTH_KEY_FILE" ]; then
-    echo "--auth-key: $AUTH_KEY_FILE not found. Create one with: podman run --rm --entrypoint moq moq-lab token generate --out - > $AUTH_KEY_FILE" >&2
+    echo "--auth-key: $AUTH_KEY_FILE not found. Create one with: podman run --rm --entrypoint moq moq-lab auth generate --out - > $AUTH_KEY_FILE" >&2
     exit 1
 fi
 
@@ -238,8 +238,8 @@ fi
 AD_BROADCAST="$NAME-ad.hang"
 EVENTS_BROADCAST="$NAME-events"
 
-# Made with the image's own `moq token`, so the host needs no extra tools. run-stream.sh
-# gets the key and a publish token through the environment.
+# Made with the image's own `moq auth`, so the host needs no extra tools. run-stream.sh
+# gets the key and a publish token through the environment. `**` grants every path.
 JWT_QUERY=""
 AUTH_ARGS=()
 if [ "$AUTH" = true ]; then
@@ -247,10 +247,10 @@ if [ "$AUTH" = true ]; then
     if [ -n "$AUTH_KEY_FILE" ]; then
         AUTH_KEY=$(cat "$AUTH_KEY_FILE")
     else
-        AUTH_KEY=$(moq_cli token generate --out -)
+        AUTH_KEY=$(moq_cli auth generate --out -)
     fi
-    PUBLISH_JWT=$(printf '%s' "$AUTH_KEY" | moq_cli token sign --key - --publish "" --subscribe "")
-    VIEWER_JWT=$(printf '%s' "$AUTH_KEY" | moq_cli token sign --key - --subscribe "" \
+    PUBLISH_JWT=$(printf '%s' "$AUTH_KEY" | moq_cli auth sign --key - --publish '**' --subscribe '**')
+    VIEWER_JWT=$(printf '%s' "$AUTH_KEY" | moq_cli auth sign --key - --subscribe '**' \
         --expires "$(( $(date +%s) + 86400 ))")
     JWT_QUERY="?jwt=$PUBLISH_JWT"
     AUTH_ARGS=(-e "MOQ_LAB_AUTH_KEY=$AUTH_KEY" -e "MOQ_LAB_JWT=$PUBLISH_JWT")

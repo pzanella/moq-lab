@@ -308,7 +308,7 @@ work with every mode above.
 
 # Your own signing key, so the tokens you give out stay valid across runs.
 # Create the key once (the moq-lab image exists after the first ./stream.sh run):
-podman run --rm --entrypoint moq moq-lab token generate --out - > my-key.jwk
+podman run --rm --entrypoint moq moq-lab auth generate --out - > my-key.jwk
 ./stream.sh bbb --auth-key my-key.jwk
 ```
 
@@ -325,21 +325,23 @@ Relay URL for the player: https://localhost:4443/?jwt=eyJ0eXAiOiJKV1Qi...
 How it works:
 
 - The relay checks every connection, and every call to its HTTP API
-  (section 8), against the signing key. A request without a token, or with a
+  (section 8). The relay does not read the token itself: inside the
+  container, `moq auth serve` checks it against the signing key and tells
+  the relay what the token allows. A request without a token, or with a
   token signed by another key, is refused (HTTP `401`).
 - The viewer token can only **subscribe**. It cannot publish.
 - `stream.sh` also signs a publish token for its own publishers (the content
   stream, the ads, and the SGAI signaling). You don't need to do anything for
   these.
-- The key and tokens are made with the `moq token` command inside the Podman
+- The key and tokens are made with the `moq auth` command inside the Podman
   image, so you don't need any other tool on your machine.
 
 Keep `my-key.jwk` private: anyone who has it can sign their own tokens. To
 make more viewer tokens with your key (for example, with a different expiry
-time), use `moq token sign`:
+time), use `moq auth sign`. `'**'` means every broadcast:
 
 ```bash
-podman run --rm -i --entrypoint moq moq-lab token sign --key - --subscribe "" \
+podman run --rm -i --entrypoint moq moq-lab auth sign --key - --subscribe '**' \
   --expires "$(( $(date +%s) + 3600 ))" < my-key.jwk
 ```
 
@@ -1076,12 +1078,17 @@ The request has no token, or the token is wrong. Check that the URL has
 run: with `--auth`, every run makes a new key, so old tokens stop working.
 Viewer tokens also expire after 24 hours. A viewer token can't publish.
 
-**`connection closed err=authentication is disabled` in the log (without `--auth`)**
+**`connection closed err=the auth server refused the session` in the log (without `--auth`)**
 The player connects with a token (`?jwt=...` in its URL, often left over from
 an earlier `--auth` run), but this run's relay is public. A public relay
-refuses every request that carries a token. The player keeps reconnecting,
+refuses every request that carries a token (HTTP `401` for the HTTP API). The player keeps reconnecting,
 so the line repeats. Remove `?jwt=...` from the player's URL, or start the
 stream with `--auth`/`--auth-key` and use the URL that `stream.sh` prints.
+
+**`UDP receive buffer is smaller than requested` in the log**
+This is only a warning from `moq-relay` and `moq`. The Podman machine allows
+smaller UDP buffers than they ask for. On a local machine this is fine. Under
+heavy load it can cause packet loss.
 
 **The stream freezes at the ad→content transition (SSAI)**
 This can happen if the ad file has a very different frame rate or resolution
@@ -1138,7 +1145,7 @@ adds the SSAI/CSAI/SGAI ad-insertion handling around it.
 Versions are pinned deliberately, not left floating — both sides move fast
 enough (weekly-ish point releases, occasional breaking changes) that an
 unpinned binary download or `npm install` can silently pick up different
-behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.10.0`/`0.14.5`
+behavior on a rebuild. Currently: `moq-cli`/`moq-relay` `0.14.8`/`0.17.8`
 ([Containerfile](Containerfile)), `@moq/net` `0.3.5`/`@moq/msf` `0.2.2`
 ([package.json](package.json)). Bump the Rust and JS sides together and
 re-test rather than upgrading one at a time — see
