@@ -34,6 +34,17 @@ if [ -n "${MOQ_LAB_AUTH_KEY:-}" ]; then
 fi
 RELAY_URL="http://localhost:${PORT}/${JWT_QUERY}"
 
+# Set by stream.sh --netem: shapes what the relay sends to its viewers with one of
+# lib/netem.mjs's profiles. Applied before the relay starts, so no viewer ever sees
+# the unshaped network, and before the dashboard server starts, which inherits
+# MOQ_LAB_NETEM_PORT to switch profiles later. stream.sh adds the NET_ADMIN
+# capability tc needs.
+if [ -n "${MOQ_LAB_NETEM:-}" ]; then
+    export MOQ_LAB_NETEM_PORT="$PORT"
+    NETEM_SHAPING=$(node /usr/local/bin/lib/netem.mjs "$MOQ_LAB_NETEM") || exit 1
+    echo "Network profile '$MOQ_LAB_NETEM': ${NETEM_SHAPING:-no shaping}" >&2
+fi
+
 # Set by stream.sh --dashboard/--dashboard-port. Everything this script and its
 # children print is tee'd to a file the dashboard server tails for its log view,
 # and the pass-through proxies before `moq import` record an ingest clock for

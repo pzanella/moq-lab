@@ -37,7 +37,7 @@ RUN pnpm build
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg ca-certificates curl nodejs && \
+    ffmpeg ca-certificates curl nodejs iproute2 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/moq /usr/local/bin/moq

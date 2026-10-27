@@ -362,6 +362,70 @@ jobs:
   # tap sits in the pipe, so check the broadcast still comes through, then that
   # the server serves the built UI, its config, and an event stream carrying
   # both container logs and ingest-clock samples.
+  # stream.sh --netem: the relay's traffic to viewers is shaped, the dashboard's
+  # HTTP is not, and the dashboard can switch profiles at runtime.
+  smoke-test-podman-netem:
+    needs: smoke-test-podman-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: moq-lab-image
+          path: /tmp
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moq-lab-assets
+          path: assets
+
+      - name: Load the sandbox image
+        run: gunzip -c /tmp/moq-lab-image.tar.gz | podman load
+
+      # A rootless container can't load kernel modules itself.
+      - name: Load the tc modules
+        run: sudo modprobe -a sch_netem sch_prio cls_u32
+
+      - name: Smoke test -- network lab
+        run: |
+          podman run -d --name ci-netem --init --cap-add NET_ADMIN \
+            -e MOQ_LAB_NETEM=satellite -e MOQ_LAB_DASHBOARD_PORT=18080 -p 18080:18080/tcp \
+            -v "$PWD/assets/ci-test.mp4:/media/input.mp4:ro" \
+            -p 15449:15449/udp -p 15449:15449/tcp \
+            moq-lab /media/input.mp4 ci-test.hang false 15449 false 30 false 6
+
+          ok=false
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:15449/announced 2>/dev/null | grep -q "ci-test.hang"; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          if [ "$ok" != true ]; then
+            echo "broadcast never announced with --netem"; podman logs ci-netem; exit 1
+          fi
+
+          fail=0
+          podman logs ci-netem 2>&1 | grep -q "Network profile 'satellite': qdisc netem" \
+            || { echo "satellite profile not applied at startup"; fail=1; }
+
+          # satellite adds 300 ms to every packet the relay sends out, and nothing to the
+          # dashboard's HTTP (its clock-offset measurement needs a symmetric path).
+          slow() { curl -s -o /dev/null -w '%{time_total}' "$1" | LC_NUMERIC=C awk '{ exit !($1 >= 0.3) }'; }
+          slow http://localhost:15449/announced || { echo "relay traffic is not delayed"; fail=1; }
+          slow http://localhost:18080/api/time && { echo "dashboard traffic is delayed"; fail=1; }
+
+          post() {
+            curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+              -d "{\"profile\":\"$1\"}" http://localhost:18080/api/netem
+          }
+          [ "$(post off)" = 200 ] || { echo "switching to off failed"; fail=1; }
+          slow http://localhost:15449/announced && { echo "relay traffic still delayed after off"; fail=1; }
+          [ "$(post 'x; reboot')" = 400 ] || { echo "an unknown profile was not refused"; fail=1; }
+
+          [ "$fail" -ne 0 ] && podman logs ci-netem
+          podman rm -f ci-netem
+          exit "$fail"
+
   smoke-test-podman-dashboard:
     needs: smoke-test-podman-build
     runs-on: ubuntu-latest

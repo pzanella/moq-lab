@@ -2,7 +2,7 @@
 # Usage: stream.sh [name] [--source URL] [--abr-ladder] [--port N] [--ssai-mode] [--ad-break-every N]
 #                   [--csai-mode] [--ad-break-length N]
 #                   [--sgai-mode] [--auth] [--auth-key FILE]
-#                   [--dashboard] [--dashboard-port N]
+#                   [--dashboard] [--dashboard-port N] [--netem PROFILE]
 #
 # --source URL         Stream from an http(s) URL -- an MP4 file, an HLS playlist
 #                      (.m3u8), or a DASH manifest (.mpd), on demand or live --
@@ -35,6 +35,10 @@
 # --dashboard          Also serve the real-time monitoring web UI (dashboard/) from the
 #                      container, on http://localhost:8080. See README.md "Dashboard".
 # --dashboard-port N   Like --dashboard, on port N instead of 8080.
+# --netem PROFILE      Shape the network between the relay and its viewers: mobile,
+#                      lossy, congested, satellite, or off (see lib/netem.mjs). With
+#                      --dashboard, you can switch profiles there while the stream runs.
+#                      See README.md "Network lab".
 set -euo pipefail
 
 # Yellow only when stderr is an actual terminal -- keeps piped/redirected output
@@ -65,6 +69,7 @@ AUTH=false
 AUTH_KEY_FILE=""
 DASHBOARD=false
 DASHBOARD_PORT=8080
+NETEM=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -83,6 +88,7 @@ while [ $# -gt 0 ]; do
         --dashboard) DASHBOARD=true; shift ;;
         --dashboard-port) DASHBOARD=true; DASHBOARD_PORT="$2"; shift 2 ;;
         --source) SOURCE="$2"; shift 2 ;;
+        --netem) NETEM="$2"; shift 2 ;;
         *) NAME="$1"; NAME_SET=true; shift ;;
     esac
 done
@@ -134,6 +140,13 @@ fi
 
 if [ -n "$AUTH_KEY_FILE" ] && [ ! -f "$AUTH_KEY_FILE" ]; then
     echo "--auth-key: $AUTH_KEY_FILE not found. Create one with: podman run --rm --entrypoint moq moq-lab auth generate --out - > $AUTH_KEY_FILE" >&2
+    exit 1
+fi
+
+# The container checks the name against lib/netem.mjs's profiles; this only keeps
+# anything that isn't a plain name out of the podman command line.
+if [ -n "$NETEM" ] && ! [[ "$NETEM" =~ ^[a-z]+$ ]]; then
+    echo "--netem: expected a profile name (mobile, lossy, congested, satellite, off), got '$NETEM'." >&2
     exit 1
 fi
 
@@ -269,6 +282,13 @@ if [ "$DASHBOARD" = true ]; then
     echo "Dashboard: http://localhost:${DASHBOARD_PORT} (live once the container is up)" >&2
 fi
 
+# tc needs NET_ADMIN, inside the container's own network namespace only. Without
+# --netem the container doesn't get it.
+NETEM_ARGS=()
+if [ -n "$NETEM" ]; then
+    NETEM_ARGS=(--cap-add NET_ADMIN -e "MOQ_LAB_NETEM=$NETEM")
+fi
+
 # run-stream.sh's first argument: the mounted local file, or the --source URL as-is.
 CONTAINER_VOLUMES=()
 if [ -n "$SOURCE" ]; then
@@ -283,7 +303,7 @@ fi
 
 if [ "$SGAI" = true ]; then
     podman run --name "$CONTAINER_NAME" --rm -d --init \
-        ${CONTAINER_VOLUMES[@]+"${CONTAINER_VOLUMES[@]}"} ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
+        ${CONTAINER_VOLUMES[@]+"${CONTAINER_VOLUMES[@]}"} ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} ${NETEM_ARGS[@]+"${NETEM_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" "$CONTAINER_INPUT" "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" "$SGAI" "$AD_BROADCAST" \
         >/dev/null
@@ -330,7 +350,7 @@ else
     # "false" "" fill run-stream.sh's SGAI/AD_BROADCAST positions (unused here) so
     # BLACKOUT_AT/BLACKOUT_LENGTH land in its CSAI blackout positions after them.
     podman run --name "$CONTAINER_NAME" --rm -it --init \
-        ${CONTAINER_VOLUMES[@]+"${CONTAINER_VOLUMES[@]}"} ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} \
+        ${CONTAINER_VOLUMES[@]+"${CONTAINER_VOLUMES[@]}"} ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} ${DASHBOARD_ARGS[@]+"${DASHBOARD_ARGS[@]}"} ${NETEM_ARGS[@]+"${NETEM_ARGS[@]}"} \
         -p "$PORT:$PORT/udp" -p "$PORT:$PORT/tcp" \
         "$IMAGE" "$CONTAINER_INPUT" "$BROADCAST" "$ABR_LADDER" "$PORT" "$SSAI" "$AD_BREAK_EVERY" "$CSAI" "$AD_BREAK_LENGTH" \
         false "" "$BLACKOUT_AT" "$BLACKOUT_LENGTH"
