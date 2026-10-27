@@ -308,8 +308,8 @@ const adRelayUrl = `http://localhost:${relayPort}/${jwt ? `?jwt=${jwt}` : ""}`;
 
 function publishAdOnce(broadcastName) {
     const cmd = `ffmpeg -hide_banner -v quiet -re -i "${adFile}" -c copy ` +
-        `-f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - | ` +
-        `moq --client-connect "${adRelayUrl}" --broadcast "${broadcastName}" import fmp4`;
+        `-f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer -frag_duration 1000 - | ` +
+        `moq --connect "${adRelayUrl}" --broadcast "${broadcastName}" import fmp4`;
     const proc = spawn("podman", ["exec", "-d", containerName, "sh", "-c", cmd], { stdio: "ignore" });
     proc.on("error", (err) => log(`failed to launch ad publish: ${err.message}`));
 }

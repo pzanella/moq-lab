@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  MOQ_RELAY_VERSION: "0.14.5"
+  MOQ_RELAY_VERSION: "0.17.8"
 
 jobs:
   lint:
@@ -54,22 +54,22 @@ jobs:
 
       - name: Install moq-relay (prebuilt binary, same version pinned in the Containerfile)
         run: |
-          curl -fsSL "https://github.com/moq-dev/moq/releases/download/moq-relay-v${MOQ_RELAY_VERSION}/moq-relay-${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar xz -C /usr/local/bin --strip-components=2 "moq-relay-${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu/bin/moq-relay"
+          curl -fsSL "https://github.com/moq-dev/moq/releases/download/moq-relay-v${MOQ_RELAY_VERSION}/moq-relay-v${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C /usr/local/bin --strip-components=2 "moq-relay-v${MOQ_RELAY_VERSION}-x86_64-unknown-linux-gnu/bin/moq-relay"
           moq-relay --version
 
       - name: Start a local relay
         run: |
           cat > /tmp/relay.toml <<'EOF'
-          [server]
-          listen = "[::]:4989"
+          [listen]
+          bind = "[::]:4989"
           tls.generate = ["localhost"]
 
           [web.http]
           listen = "[::]:4989"
 
           [auth]
-          public = ""
+          public = "**"
           EOF
           nohup moq-relay /tmp/relay.toml > /tmp/relay.log 2>&1 &
           for _ in $(seq 1 30); do
@@ -403,6 +403,9 @@ jobs:
           curl -sN -m 5 http://localhost:18080/api/events -o /tmp/dashboard-events.txt || [ $? -eq 28 ]
           grep -q '^event: log' /tmp/dashboard-events.txt || { echo "no log events"; cat /tmp/dashboard-events.txt; exit 1; }
           grep -q '^event: ingest' /tmp/dashboard-events.txt || { echo "no ingest-clock events"; cat /tmp/dashboard-events.txt; exit 1; }
+          grep -q '"startLagMs":' /tmp/dashboard-events.txt || { echo "ingest-clock events have no startLagMs"; cat /tmp/dashboard-events.txt; exit 1; }
+          # The latency readout maps frame timestamps with the catalog's clock.
+          curl -sf http://localhost:15443/fetch/ci-test.hang/catalog.json | grep -q '"clock":' || { echo "catalog has no clock"; exit 1; }
           podman rm -f ci-dashboard
 
   # Same base pipeline, with the relay started the way stream.sh --auth starts it:
@@ -431,10 +434,10 @@ jobs:
       - name: Smoke test -- JWT auth (base pipeline)
         run: |
           moq_cli() { podman run --rm -i --entrypoint moq moq-lab "$@"; }
-          KEY=$(moq_cli token generate --out -)
-          PUBLISH_JWT=$(printf '%s' "$KEY" | moq_cli token sign --key - --publish "" --subscribe "")
-          VIEWER_JWT=$(printf '%s' "$KEY" | moq_cli token sign --key - --subscribe "")
-          OTHER_JWT=$(moq_cli token generate --out - | moq_cli token sign --key - --subscribe "")
+          KEY=$(moq_cli auth generate --out -)
+          PUBLISH_JWT=$(printf '%s' "$KEY" | moq_cli auth sign --key - --publish '**' --subscribe '**')
+          VIEWER_JWT=$(printf '%s' "$KEY" | moq_cli auth sign --key - --subscribe '**')
+          OTHER_JWT=$(moq_cli auth generate --out - | moq_cli auth sign --key - --subscribe '**')
 
           podman run -d --name ci-auth --init \
             -e "MOQ_LAB_AUTH_KEY=$KEY" -e "MOQ_LAB_JWT=$PUBLISH_JWT" \
@@ -461,8 +464,8 @@ jobs:
 
           # A subscribe-only token must not be able to publish.
           podman exec ci-auth sh -c "ffmpeg -hide_banner -v quiet -re -t 3 -i /media/input.mp4 -c copy \
-            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer+frag_every_frame - |
-            timeout 5 moq --client-connect 'http://localhost:15448/?jwt=$VIEWER_JWT' --broadcast intruder.hang import fmp4" || true
+            -f mp4 -movflags cmaf+separate_moof+delay_moov+skip_trailer -frag_duration 1000 - |
+            timeout 5 moq --connect 'http://localhost:15448/?jwt=$VIEWER_JWT' --broadcast intruder.hang import fmp4" || true
           if curl -sf "http://localhost:15448/announced?jwt=$VIEWER_JWT" | grep -q "intruder.hang"; then
             echo "viewer token was able to publish"; fail=1
           fi
